@@ -30,6 +30,7 @@ def mine():
     # base values
     nonce = 0
     start = time.time()
+    base = hashlib.sha256(prefix)
 
     # general print statements
     print(f"Email: {EMAIL}")
@@ -38,8 +39,9 @@ def mine():
 
     # loop till we find a winning nonce
     while True:
-        data = prefix + struct.pack(">q", nonce)
-        digest = hashlib.sha256(data).digest()
+        h = base.copy()
+        h.update(struct.pack(">q", nonce))
+        digest = h.digest()
 
         # check validity of the digest
         if validate_nonce(digest, DIFFICULTY):
