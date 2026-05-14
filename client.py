@@ -1,6 +1,6 @@
 import os
-import logging
 import asyncio
+import logging
 import dataclasses
 
 from ipv8.configuration import (
@@ -9,18 +9,23 @@ from ipv8.configuration import (
     WalkerDefinition,
     default_bootstrap_defs,
 )
+
 from ipv8_service import IPv8
 from miner import EMAIL, GITHUB_URL
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
+# logging configuration
 logging.basicConfig(level=logging.CRITICAL)
 
+# constant variables
 _DIR = os.path.dirname(os.path.abspath(__file__))
 COMMUNITY_ID = bytes.fromhex("2c1cc6e35ff484f99ebdfb6108477783c0102881")
 SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c4591cc0cb178bc5a811da6d87d27ef319b2638ef60cc8d119724f4c53a1ebfad919c3ac4136c501ce5c09364e0ebb"
 
 
+# server request payload
+# wire types are inferred from the python type annotations
 @dataclasses.dataclass
 class SubmissionPayload(DataClassPayload[1]):
     email: str
@@ -28,16 +33,20 @@ class SubmissionPayload(DataClassPayload[1]):
     nonce: int
 
 
+# server response payload
+# wire types are inferred from the python type annotations
 @dataclasses.dataclass
 class ResponsePayload(DataClassPayload[2]):
     success: bool
     message: str
 
 
+# register with IPv8 for serialization and deserialization
 convert_to_payload(SubmissionPayload)
 convert_to_payload(ResponsePayload)
 
 
+# community definition
 class Lab1Community(Community):
     community_id = COMMUNITY_ID
 
@@ -51,9 +60,11 @@ class Lab1Community(Community):
             "find_and_submit", self.find_and_submit, interval=2.0, delay=3.0
         )
 
+    # find the server and submit the nonce – schedule every 2 seconds
     async def find_and_submit(self) -> None:
+        # guard checks
         if self.nonce is None:
-            print("Waiting...")
+            print("Waiting for Nonce")
             return
         if self.submitted:
             return
@@ -62,6 +73,7 @@ class Lab1Community(Community):
         print(f"Peers: {len(peers)}")
         server_key_bin = bytes.fromhex(SERVER_PUBLIC_KEY_HEX)
 
+        # iterate over the peers and find the server
         for peer in peers:
             if peer.public_key.key_to_bin() == server_key_bin:
                 self.submitted = True
@@ -71,6 +83,7 @@ class Lab1Community(Community):
 
         print("Finding Target Server")
 
+    # message handler for the server response
     def on_response(self, source_address: tuple, data: bytes) -> None:
         try:
             auth, _, payload = self._ez_unpack_auth(ResponsePayload, data)
@@ -87,14 +100,15 @@ class Lab1Community(Community):
 async def main(nonce: int) -> None:
     key_file = os.path.join(_DIR, "key.pem")
 
+    # build the start-up IPv8 configuration
     builder = (
         ConfigBuilder(clean=True)
-        .set_port(8090)
-        .set_address("0.0.0.0")
+        .set_port(8090)  # UDP port to listen on
+        .set_address("0.0.0.0")  # listen on all interfaces
         .set_log_level("CRITICAL")
-        .set_walker_interval(0.5)
+        .set_walker_interval(0.5)  # interval for peer discovery
         .set_working_directory(_DIR)
-        .add_key("my key", "curve25519", key_file)
+        .add_key("my key", "curve25519", key_file)  # load or generate the key pair
         .add_overlay(
             "Lab1Community",
             "my key",
@@ -105,10 +119,13 @@ async def main(nonce: int) -> None:
         )
     )
 
+    # create the IPv8 instance and start it
     ipv8 = IPv8(builder.finalize(), extra_communities={"Lab1Community": Lab1Community})
     await ipv8.start()
 
+    # get the community instance
     community = ipv8.get_overlay(Lab1Community)
+    # set the nonce
     community.nonce = nonce
 
     print("Joining Community and Discovering Peers")
