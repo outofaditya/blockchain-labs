@@ -1,6 +1,8 @@
+import os
 import time
 import struct
 import hashlib
+import multiprocessing as mp
 
 # constants
 DIFFICULTY = 28
@@ -25,42 +27,61 @@ def validate_nonce(digest: bytes, bits: int) -> bool:
     return True
 
 
+# the worker function
+def worker(worker_id: int, num_workers: int, result_queue, stop_event):
+    base = hashlib.sha256(prefix)
+
+    # partition the nonce range as i then i+N and so on
+    nonce = worker_id
+
+    while not stop_event.is_set():
+        h = base.copy()
+        h.update(struct.pack(">q", nonce))
+        digest = h.digest()
+        if validate_nonce(digest, DIFFICULTY):
+            # push the result to queue and set the stop event
+            result_queue.put((nonce, digest))
+            stop_event.set()
+            return
+        nonce += num_workers
+
+
 # the mining loop
 def mine():
-    # base values
-    nonce = 0
-    start = time.time()
-    base = hashlib.sha256(prefix)
+    # get the available core count
+    num_workers = os.cpu_count() or 1
 
     # general print statements
     print(f"Email: {EMAIL}")
     print(f"GitHub URL: {GITHUB_URL}")
+    print(f"Number of Workers: {num_workers}")
     print(f"Difficulty Level: {DIFFICULTY} Leading Zero Bits\n")
 
-    # loop till we find a winning nonce
-    while True:
-        h = base.copy()
-        h.update(struct.pack(">q", nonce))
-        digest = h.digest()
+    # set the structures for workers
+    result_queue = mp.Queue()
+    stop_event = mp.Event()
+    start = time.time()
 
-        # check validity of the digest
-        if validate_nonce(digest, DIFFICULTY):
-            elapsed = time.time() - start
+    workers = [
+        mp.Process(target=worker, args=(i, num_workers, result_queue, stop_event))
+        for i in range(num_workers)
+    ]
 
-            print(f"\nNonce: {nonce}")
-            print(f"\nHash Value: {digest.hex()}")
-            print(f"Time Taken: {elapsed:.1f}s")
+    # start the worker processes
+    for w in workers:
+        w.start()
 
-            return nonce, digest
+    # wait for the first result
+    nonce, digest = result_queue.get()
+    for w in workers:
+        w.join()
 
-        # print progress every 500,000 nonces
-        if nonce % 500_000 == 0 and nonce > 0:
-            elapsed = time.time() - start
-            rate = nonce / elapsed / 1_000_000
-            print(f"{nonce:>12,} Nonces Tried | {rate:.2f}M/s | {elapsed:.0f}s Elapsed")
+    elapsed = time.time() - start
+    print(f"\nNonce: {nonce}")
+    print(f"\nHash Value: {digest.hex()}")
+    print(f"Time Taken: {elapsed:.1f}s")
 
-        # increment the nonce
-        nonce += 1
+    return nonce, digest
 
 
 if __name__ == "__main__":
