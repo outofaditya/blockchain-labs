@@ -34,16 +34,18 @@ def worker(worker_id: int, num_workers: int, result_queue, stop_event):
     # partition the nonce range as i then i+N and so on
     nonce = worker_id
 
-    while not stop_event.is_set():
+    while True:
         h = base.copy()
         h.update(struct.pack(">q", nonce))
         digest = h.digest()
         if validate_nonce(digest, DIFFICULTY):
-            # push the result to queue and set the stop event
             result_queue.put((nonce, digest))
             stop_event.set()
             return
         nonce += num_workers
+        # cheap power-of-2 check; fires every 16384 iterations
+        if nonce & 0x3FFF == 0 and stop_event.is_set():
+            return
 
 
 # the mining loop
@@ -81,8 +83,6 @@ def mine():
 
     # wait for the first result
     nonce, digest = result_queue.get()
-    for w in workers:
-        w.join()
 
     elapsed = time.time() - start
 
@@ -91,6 +91,9 @@ def mine():
     print(f"{'Time Elapsed':<15}: {elapsed:.2f} seconds")
 
     print("=" * 80)
+
+    for w in workers:
+        w.join()
 
     return nonce, digest
 
