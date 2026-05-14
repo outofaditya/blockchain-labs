@@ -52,10 +52,18 @@ def mine():
     num_workers = os.cpu_count() or 1
 
     # general print statements
-    print(f"Email: {EMAIL}")
-    print(f"GitHub URL: {GITHUB_URL}")
-    print(f"Number of Workers: {num_workers}")
-    print(f"Difficulty Level: {DIFFICULTY} Leading Zero Bits\n")
+    print("=" * 80)
+    print("PROOF-OF-WORK MINER PROGRAM")
+    print("=" * 80)
+
+    print(f"{'Email':<15}: {EMAIL}")
+    print(f"{'GitHub URL':<15}: {GITHUB_URL}")
+    print(f"{'Workers':<15}: {num_workers}")
+    print(f"{'Difficulty':<15}: {DIFFICULTY} Leading Zero Bits")
+
+    print("-" * 80)
+    print("MINING STARTED")
+    print("-" * 80)
 
     # set the structures for workers
     result_queue = mp.Queue()
@@ -77,9 +85,12 @@ def mine():
         w.join()
 
     elapsed = time.time() - start
-    print(f"\nNonce: {nonce}")
-    print(f"\nHash Value: {digest.hex()}")
-    print(f"Time Taken: {elapsed:.1f}s")
+
+    print(f"{'Nonce':<15}: {nonce}")
+    print(f"{'Digest Value':<15}: {digest.hex()}")
+    print(f"{'Time Elapsed':<15}: {elapsed:.2f} seconds")
+
+    print("=" * 80)
 
     return nonce, digest
 
