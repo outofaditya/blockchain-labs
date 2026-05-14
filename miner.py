@@ -93,6 +93,8 @@ def mine():
     print("=" * 80)
 
     for w in workers:
+        w.terminate()
+    for w in workers:
         w.join()
 
     return nonce, digest
