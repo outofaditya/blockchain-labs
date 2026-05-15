@@ -378,6 +378,16 @@ class SignerCommunity(Community):
         # non-submitters receive no server feedback; mark round done locally
         self.round_done_event.set()
 
+    # registration helper: sends RegisterGroup to the server (NOT called at runtime)
+    def _register_group(self) -> None:
+        server = self._server_peer()
+        if server is None:
+            return
+        self.ez_send(
+            server,
+            RegisterGroup(MEMBER_KEYS[0], MEMBER_KEYS[1], MEMBER_KEYS[2]),
+        )
+
 
 # main entry point
 async def main(pem_path: str, port: int) -> None:
