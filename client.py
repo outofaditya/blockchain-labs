@@ -56,6 +56,7 @@ class Lab1Community(Community):
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.submitted = False
+        self.last_peer_count = 0
         self.nonce: int | None = None
         self.done: asyncio.Event = asyncio.Event()
         self.add_message_handler(ResponsePayload, self.on_response)
@@ -66,24 +67,21 @@ class Lab1Community(Community):
     # find the server and submit the nonce – schedule every 2 seconds
     async def find_and_submit(self) -> None:
         # guard checks
-        if self.nonce is None:
-            print("Waiting for Nonce")
-            return
-        if self.submitted:
+        if self.nonce is None or self.submitted:
             return
 
         peers = self.get_peers()
-        print(f"Peers: {len(peers)}")
+        if len(peers) != self.last_peer_count:
+            print(f"{'Peers Found':<15}: {len(peers)}")
+            self.last_peer_count = len(peers)
 
         # iterate over the peers and find the server
         for peer in peers:
             if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
                 self.submitted = True
-                print(f"Server: {peer.address}")
+                print(f"{'Server':<15}: {peer.address}")
                 self.ez_send(peer, SubmissionPayload(EMAIL, GITHUB_URL, self.nonce))
                 return
-
-        print("Finding Target Server")
 
     # message handler for the server response
     def on_response(self, source_address: tuple, data: bytes) -> None:
@@ -94,9 +92,15 @@ class Lab1Community(Community):
             return
         if auth.public_key_bin != SERVER_PUBLIC_KEY:
             return
-        print("\nServer Response")
-        print(f"Success: {payload.success}")
-        print(f"Message: {payload.message}")
+
+        # print the server response
+        print("-" * 80)
+        print("SERVER RESPONSE")
+        print("-" * 80)
+        print(f"{'Success':<15}: {payload.success}")
+        print(f"{'Message':<15}: {payload.message}")
+        print("=" * 80)
+
         self.done.set()
 
 
@@ -131,9 +135,16 @@ async def main(nonce: int) -> None:
     # set the nonce
     community.nonce = nonce
 
-    print("Joining Community and Discovering Peers")
-    print(f"Key File: {key_file}")
-    print(f"Key: {community.my_peer.public_key.key_to_bin().hex()}\n")
+    # general print statements
+    print("=" * 80)
+    print("IPv8 SUBMISSION CLIENT")
+    print("=" * 80)
+    print(f"{'Key File':<15}: {key_file}")
+    print(f"{'Public Key':<15}: {community.my_peer.public_key.key_to_bin().hex()}")
+    print(f"{'Nonce':<15}: {nonce}")
+    print("-" * 80)
+    print("DISCOVERY AND SUBMISSION")
+    print("-" * 80)
 
     await community.done.wait()
     await ipv8.stop()
