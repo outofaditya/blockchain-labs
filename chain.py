@@ -1,4 +1,5 @@
 from struct import Struct
+from enum import Enum, auto
 from hashlib import sha256
 from dataclasses import dataclass
 
@@ -79,11 +80,19 @@ def mine_block(
 GENESIS_HASH = compute_block_hash(pack_header(GENESIS))
 
 
+class AppendStatus(Enum):
+    INVALID = auto()
+    EXTENDS_TIP = auto()
+    KNOWN_BLOCK = auto()
+    NEEDS_PARENT = auto()
+
+
 class Chain:
     def __init__(self) -> None:
         self.blocks: list[Block] = [GENESIS]
         self.by_hash: dict[bytes, Block] = {GENESIS_HASH: GENESIS}
         self.by_height: dict[int, Block] = {0: GENESIS}
+        self.tip_hash: bytes = GENESIS_HASH
 
     @property
     def tip(self) -> Block:
@@ -96,11 +105,27 @@ class Chain:
     def append(self, block: Block) -> bool:
         if not validate_block(block, self.tip):
             return False
-        block_hash = compute_block_hash(pack_header(block))
+        self._apply(block, compute_block_hash(pack_header(block)))
+        return True
+
+    def _apply(self, block: Block, block_hash: bytes) -> None:
         self.blocks.append(block)
         self.by_hash[block_hash] = block
         self.by_height[len(self.blocks) - 1] = block
-        return True
+        self.tip_hash = block_hash
+
+    def try_extend(self, block: Block) -> tuple[AppendStatus, bytes | None]:
+        block_hash = compute_block_hash(pack_header(block))
+        if block_hash in self.by_hash:
+            return AppendStatus.KNOWN_BLOCK, None
+        if block.prev_hash != self.tip_hash:
+            if block.prev_hash in self.by_hash:
+                return AppendStatus.INVALID, None
+            return AppendStatus.NEEDS_PARENT, block.prev_hash
+        if not validate_block(block, self.tip):
+            return AppendStatus.INVALID, None
+        self._apply(block, block_hash)
+        return AppendStatus.EXTENDS_TIP, None
 
 
 if __name__ == "__main__":
