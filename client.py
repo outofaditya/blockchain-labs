@@ -22,6 +22,7 @@ SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c
 SERVER_PUBLIC_KEY = bytes.fromhex(SERVER_PUBLIC_KEY_HEX)
 
 
+# payload bundling email url and nonce sent to the lab1 server
 @dataclasses.dataclass
 class SubmissionPayload(DataClassPayload[1]):
     email: str
@@ -29,6 +30,7 @@ class SubmissionPayload(DataClassPayload[1]):
     nonce: int
 
 
+# payload carrying the server verdict after submission
 @dataclasses.dataclass
 class ResponsePayload(DataClassPayload[2]):
     success: bool
@@ -39,9 +41,11 @@ convert_to_payload(SubmissionPayload)
 convert_to_payload(ResponsePayload)
 
 
+# ipv8 community that finds the lab1 server and submits the mined nonce
 class Lab1Community(Community):
     community_id = COMMUNITY_ID
 
+    # sets up state event handler and the periodic submit task
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.submitted = False
@@ -53,6 +57,7 @@ class Lab1Community(Community):
             "find_and_submit", self.find_and_submit, interval=2.0, delay=3.0
         )
 
+    # scheduled periodically because peer discovery takes time after boot
     async def find_and_submit(self) -> None:
         if self.nonce is None or self.submitted:
             return
@@ -69,6 +74,7 @@ class Lab1Community(Community):
                 self.ez_send(peer, SubmissionPayload(EMAIL, GITHUB_URL, self.nonce))
                 return
 
+    # handles the server reply and signals the main coroutine to exit
     def on_response(self, source_address: tuple, data: bytes) -> None:
         try:
             auth, _, payload = self._ez_unpack_auth(ResponsePayload, data)
@@ -86,6 +92,7 @@ class Lab1Community(Community):
         self.done.set()
 
 
+# wires up ipv8 community and waits for the server response before stopping
 async def main(nonce: int) -> None:
     key_file = os.path.join(_DIR, "key.pem")
 
