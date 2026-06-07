@@ -93,6 +93,15 @@ class Chain:
     def height(self) -> int:
         return len(self.blocks) - 1
 
+    def append(self, block: Block) -> bool:
+        if not validate_block(block, self.tip):
+            return False
+        block_hash = compute_block_hash(pack_header(block))
+        self.blocks.append(block)
+        self.by_hash[block_hash] = block
+        self.by_height[len(self.blocks) - 1] = block
+        return True
+
 
 if __name__ == "__main__":
     from os import urandom
