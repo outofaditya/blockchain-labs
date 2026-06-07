@@ -6,6 +6,7 @@ TIMESTAMP_FORMAT = ">Q"
 HEADER_FORMAT = ">32s32sQIQ"
 # pre-compiled for the mining hot path
 _HEADER_STRUCT = Struct(HEADER_FORMAT)
+_EMPTY_TXS_HASH = sha256(b"").digest()
 _TIMESTAMP_STRUCT = Struct(TIMESTAMP_FORMAT)
 
 
@@ -31,6 +32,12 @@ def pack_header(block: Block) -> bytes:
 
 def compute_block_hash(header_bytes: bytes) -> bytes:
     return sha256(header_bytes).digest()
+
+
+def compute_txs_hash(tx_hashes: tuple[bytes, ...]) -> bytes:
+    if not tx_hashes:
+        return _EMPTY_TXS_HASH
+    return sha256(b"".join(tx_hashes)).digest()
 
 
 def compute_tx_hash(
