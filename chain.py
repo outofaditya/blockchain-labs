@@ -18,6 +18,9 @@ class Block:
     tx_hashes: tuple[bytes, ...]
 
 
+GENESIS = Block(b"\x00" * 32, _EMPTY_TXS_HASH, 0, 0, 0, ())
+
+
 def pack_header(block: Block) -> bytes:
     return _HEADER_STRUCT.pack(
         block.prev_hash,
