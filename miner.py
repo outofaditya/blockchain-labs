@@ -9,10 +9,11 @@ EMAIL = "acpatil@tudelft.nl"
 GITHUB_URL = "https://github.com/outofaditya/blockchain-labs"
 PREFIX = EMAIL.encode() + b"\n" + GITHUB_URL.encode() + b"\n"
 
-# pre-compiled for the mining hot path
+# precompiled for the mining hot path
 _NONCE_STRUCT = Struct(">q")
 
 
+# checks leading zeros byte by byte to short circuit cheaply
 def validate_nonce(digest: bytes, bits: int) -> bool:
     full, rem = divmod(bits, 8)
     if any(digest[:full]):
@@ -20,6 +21,7 @@ def validate_nonce(digest: bytes, bits: int) -> bool:
     return not rem or digest[full] < (1 << (8 - rem))
 
 
+# each subprocess mines its own nonce stride so the search partitions without coordination
 def worker(worker_id: int, num_workers: int, result_queue, stop_event):
     base = sha256(PREFIX)
     nonce = worker_id
@@ -32,11 +34,12 @@ def worker(worker_id: int, num_workers: int, result_queue, stop_event):
             stop_event.set()
             return
         nonce += num_workers
-        # cheap power-of-2 check fires every 16384 iterations
+        # cheap power of 2 check fires every 16384 iterations
         if nonce & 0x3FFF == 0 and stop_event.is_set():
             return
 
 
+# spawns one worker per core and returns as soon as any worker finds a valid nonce
 def mine():
     num_workers = os.cpu_count() or 1
     print(
