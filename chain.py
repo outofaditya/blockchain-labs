@@ -76,18 +76,36 @@ def mine_block(
         nonce += 1
 
 
+GENESIS_HASH = compute_block_hash(pack_header(GENESIS))
+
+
+class Chain:
+    def __init__(self) -> None:
+        self.blocks: list[Block] = [GENESIS]
+        self.by_hash: dict[bytes, Block] = {GENESIS_HASH: GENESIS}
+        self.by_height: dict[int, Block] = {0: GENESIS}
+
+    @property
+    def tip(self) -> Block:
+        return self.blocks[-1]
+
+    @property
+    def height(self) -> int:
+        return len(self.blocks) - 1
+
+
 if __name__ == "__main__":
     from os import urandom
 
     NOW = 1_700_000_000
-    GENESIS_HASH = b"\x00" * 32
+    ZERO_HASH = b"\x00" * 32
 
     # empty body uses sha256(b"") not 32 zero bytes
     assert compute_txs_hash(()) == sha256(b"").digest()
 
     parent_txs = compute_txs_hash(())
-    p_nonce, p_hash = mine_block(GENESIS_HASH, parent_txs, 8, NOW)
-    parent = Block(GENESIS_HASH, parent_txs, NOW, 8, p_nonce, ())
+    p_nonce, p_hash = mine_block(ZERO_HASH, parent_txs, 8, NOW)
+    parent = Block(ZERO_HASH, parent_txs, NOW, 8, p_nonce, ())
 
     body = (urandom(32), urandom(32))
     child_txs = compute_txs_hash(body)
