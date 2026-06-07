@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import contextlib
 import dataclasses
 
 from ipv8.configuration import (
@@ -312,10 +313,8 @@ class SignerCommunity(Community):
         # 1. request challenge; retry until nonce arrives or round ends early
         while not self.nonce_event.is_set() and not self.round_done_event.is_set():
             self.ez_send(server, ChallengeRequest(GROUP_ID))
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.nonce_event.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
 
         if self.round_done_event.is_set():
             return  # server rejected early (e.g., group already completed)
@@ -335,7 +334,7 @@ class SignerCommunity(Community):
         while len(self.signatures) < 3:
             try:
                 await asyncio.wait_for(self.sigs_event.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 for idx in teammates:
                     if idx not in self.signatures:
                         peer = self._member_peer(idx)
@@ -354,10 +353,8 @@ class SignerCommunity(Community):
         )
         while not self.round_done_event.is_set():
             self.ez_send(server, bundle)
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.round_done_event.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
 
     # non-submitter: wait for nonce share, sign, return signature
     async def _non_submitter_flow(self, round_num: int) -> None:
