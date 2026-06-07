@@ -81,3 +81,32 @@ def mine_block(
         if has_leading_zero_bits(digest, difficulty):
             return nonce, digest
         nonce += 1
+
+
+if __name__ == "__main__":
+    from os import urandom
+
+    NOW = 1_700_000_000
+    GENESIS_HASH = b"\x00" * 32
+
+    # empty body uses sha256(b"") not 32 zero bytes
+    assert compute_txs_hash(()) == sha256(b"").digest()
+
+    parent_txs = compute_txs_hash(())
+    p_nonce, p_hash = mine_block(GENESIS_HASH, parent_txs, 8, NOW)
+    parent = Block(GENESIS_HASH, parent_txs, NOW, 8, p_nonce, ())
+
+    body = (urandom(32), urandom(32))
+    child_txs = compute_txs_hash(body)
+    c_nonce, _ = mine_block(p_hash, child_txs, 8, NOW + 1)
+    child = Block(p_hash, child_txs, NOW + 1, 8, c_nonce, body)
+
+    assert len(pack_header(child)) == 84
+    assert validate_block(child, parent)
+
+    tampered = [
+        Block(urandom(32), child_txs, NOW + 1, 8, c_nonce, body),
+        Block(p_hash, urandom(32), NOW + 1, 8, c_nonce, body),
+        Block(p_hash, child_txs, NOW + 1, 8, c_nonce ^ 1, body),
+    ]
+    assert not any(validate_block(b, parent) for b in tampered)
