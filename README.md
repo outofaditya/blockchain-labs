@@ -26,6 +26,7 @@ All three labs share the same foundation: an IPv8 peer that joins a community by
 ├── miner.py        # lab 1: standalone proof-of-work miner
 ├── client.py       # lab 1: ipv8 client that submits the mined nonce
 ├── signer.py       # lab 2: coordinated group signing client
+├── chain.py        # lab 3: block primitives and pow validation
 ├── tasks/          # original assignment briefs
 ├── keys/           # group members' public keys (private keys gitignored)
 ├── pyproject.toml  # ruff configuration
