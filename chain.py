@@ -179,4 +179,31 @@ if __name__ == "__main__":
     ]
     assert not any(validate_block(b, parent) for b in tampered)
 
+    # fork-switch scenario: branch at height 2 then longer fork wins
+    chain = Chain()
+    empty_txs = compute_txs_hash(())
+    main_blocks = [GENESIS]
+    prev = GENESIS_HASH
+    for ts in range(NOW + 100, NOW + 104):
+        n, h = mine_block(prev, empty_txs, 8, ts)
+        blk = Block(prev, empty_txs, ts, 8, n, ())
+        main_blocks.append(blk)
+        assert chain.append(blk)
+        prev = h
+    assert chain.height == 4 and chain.tip is main_blocks[-1]
+
+    # alternate shares blocks 0-2 then diverges with 3 fresh blocks for length 6
+    fork = main_blocks[:3]
+    prev = compute_block_hash(pack_header(fork[-1]))
+    for ts in range(NOW + 200, NOW + 203):
+        n, h = mine_block(prev, empty_txs, 8, ts)
+        blk = Block(prev, empty_txs, ts, 8, n, ())
+        fork.append(blk)
+        prev = h
+
+    assert chain.adopt_fork(fork)
+    assert chain.height == 5
+    assert chain.tip is fork[-1]
+    assert chain.by_height[3] is fork[3]
+
     print("tests passed!")
