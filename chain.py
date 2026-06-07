@@ -2,12 +2,14 @@ from struct import Struct
 from hashlib import sha256
 from dataclasses import dataclass
 
-TIMESTAMP_FORMAT = ">Q"
+U64_FORMAT = ">Q"
+PREFIX_FORMAT = ">32s32sQI"
 HEADER_FORMAT = ">32s32sQIQ"
 # pre-compiled for the mining hot path
+_U64_STRUCT = Struct(U64_FORMAT)
 _HEADER_STRUCT = Struct(HEADER_FORMAT)
+_PREFIX_STRUCT = Struct(PREFIX_FORMAT)
 _EMPTY_TXS_HASH = sha256(b"").digest()
-_TIMESTAMP_STRUCT = Struct(TIMESTAMP_FORMAT)
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,20 @@ def compute_tx_hash(
 ) -> bytes:
     h = sha256(sender_key)
     h.update(data)
-    h.update(_TIMESTAMP_STRUCT.pack(timestamp))
+    h.update(_U64_STRUCT.pack(timestamp))
     h.update(signature)
     return h.digest()
+
+
+def mine_block(
+    prev_hash: bytes, txs_hash: bytes, difficulty: int, timestamp: int
+) -> tuple[int, bytes]:
+    base = sha256(_PREFIX_STRUCT.pack(prev_hash, txs_hash, timestamp, difficulty))
+    nonce = 0
+    while True:
+        h = base.copy()
+        h.update(_U64_STRUCT.pack(nonce))
+        digest = h.digest()
+        if has_leading_zero_bits(digest, difficulty):
+            return nonce, digest
+        nonce += 1
