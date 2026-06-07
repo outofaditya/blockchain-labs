@@ -40,6 +40,13 @@ def compute_txs_hash(tx_hashes: tuple[bytes, ...]) -> bytes:
     return sha256(b"".join(tx_hashes)).digest()
 
 
+def has_leading_zero_bits(digest: bytes, bits: int) -> bool:
+    full, rem = divmod(bits, 8)
+    if any(digest[:full]):
+        return False
+    return not rem or digest[full] < (1 << (8 - rem))
+
+
 def compute_tx_hash(
     sender_key: bytes, data: bytes, timestamp: int, signature: bytes
 ) -> bytes:
