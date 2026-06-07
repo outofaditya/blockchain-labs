@@ -101,12 +101,18 @@ if __name__ == "__main__":
     c_nonce, _ = mine_block(p_hash, child_txs, 8, NOW + 1)
     child = Block(p_hash, child_txs, NOW + 1, 8, c_nonce, body)
 
+    # header packs to the spec-mandated 84 bytes
     assert len(pack_header(child)) == 84
+
+    # honest child validates against its parent
     assert validate_block(child, parent)
 
+    # any tampered field fails validation
     tampered = [
         Block(urandom(32), child_txs, NOW + 1, 8, c_nonce, body),
         Block(p_hash, urandom(32), NOW + 1, 8, c_nonce, body),
         Block(p_hash, child_txs, NOW + 1, 8, c_nonce ^ 1, body),
     ]
     assert not any(validate_block(b, parent) for b in tampered)
+
+    print("tests passed!")
