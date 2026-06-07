@@ -35,6 +35,7 @@ MEMBER_KEYS = [bytes.fromhex(h) for h in MEMBER_KEYS_HEX]
 SUBMITTER_BY_ROUND = {1: 1, 2: 2, 3: 3}
 
 
+# initial registration sending the three member public keys to the server
 @dataclasses.dataclass
 class RegisterGroup(DataClassPayload[1]):
     member1_key: bytes
@@ -42,6 +43,7 @@ class RegisterGroup(DataClassPayload[1]):
     member3_key: bytes
 
 
+# server reply carrying the assigned group id after registration
 @dataclasses.dataclass
 class GroupResponse(DataClassPayload[2]):
     success: bool
@@ -49,11 +51,13 @@ class GroupResponse(DataClassPayload[2]):
     message: str
 
 
+# request a fresh round nonce from the server during signing
 @dataclasses.dataclass
 class ChallengeRequest(DataClassPayload[3]):
     group_id: str
 
 
+# server reply with the round nonce and the budget deadline
 @dataclasses.dataclass
 class ChallengeResponse(DataClassPayload[4]):
     nonce: bytes
@@ -61,6 +65,7 @@ class ChallengeResponse(DataClassPayload[4]):
     deadline: float
 
 
+# three signatures over the round nonce shipped to the server for verification
 @dataclasses.dataclass
 class SignatureBundle(DataClassPayload[5]):
     group_id: str
@@ -70,6 +75,7 @@ class SignatureBundle(DataClassPayload[5]):
     sig3: bytes
 
 
+# server verdict after a bundle submission or an early rejection
 @dataclasses.dataclass
 class RoundResult(DataClassPayload[6]):
     success: bool
@@ -78,12 +84,14 @@ class RoundResult(DataClassPayload[6]):
     message: str
 
 
+# submitter forwards the server nonce to teammates so they can sign
 @dataclasses.dataclass
 class NonceShare(DataClassPayload[100]):
     round_number: int
     nonce: bytes
 
 
+# teammate sends their signature back to the submitter for bundling
 @dataclasses.dataclass
 class SignatureShare(DataClassPayload[101]):
     round_number: int
@@ -104,9 +112,11 @@ for cls in (
     convert_to_payload(cls)
 
 
+# round robin signing community where each member submits one round
 class SignerCommunity(Community):
     community_id = COMMUNITY_ID
 
+    # sets up state events handlers and the run rounds task with a short delay
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.my_member_index = (
@@ -131,12 +141,14 @@ class SignerCommunity(Community):
 
         self.register_task("run_rounds", self.run_rounds, delay=3.0)
 
+    # filters discovered peers down to the one matching the published server key
     def _server_peer(self):
         for p in self.get_peers():
             if p.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
                 return p
         return None
 
+    # resolves a teammate peer by their registration index one through three
     def _member_peer(self, index: int):
         target = MEMBER_KEYS[index - 1]
         for p in self.get_peers():
@@ -144,9 +156,11 @@ class SignerCommunity(Community):
                 return p
         return None
 
+    # wraps the ipv8 native ed25519 signing on the local private key
     def _sign(self, data: bytes) -> bytes:
         return self.crypto.create_signature(self.my_peer.key, data)
 
+    # clears per round state between iterations so events do not leak
     def _reset_round(self, round_num: int) -> None:
         self.current_round = round_num
         self.current_nonce = None
@@ -155,6 +169,7 @@ class SignerCommunity(Community):
         self.sigs_event.clear()
         self.round_done_event.clear()
 
+    # shared decode and sender verification used by every handler
     def _unpack(self, payload_cls, data, source_address, allowed_keys):
         try:
             auth, _, payload = self._ez_unpack_auth(payload_cls, data)
@@ -165,6 +180,7 @@ class SignerCommunity(Community):
             return None
         return payload
 
+    # handler for the registration acknowledgement from the server
     def on_group_response(self, source_address, data):
         payload = self._unpack(
             GroupResponse, data, source_address, (SERVER_PUBLIC_KEY,)
@@ -176,6 +192,7 @@ class SignerCommunity(Community):
             f"group_id={payload.group_id} msg={payload.message}"
         )
 
+    # handler for the server nonce received by the round submitter
     def on_challenge_response(self, source_address, data):
         payload = self._unpack(
             ChallengeResponse, data, source_address, (SERVER_PUBLIC_KEY,)
@@ -185,6 +202,7 @@ class SignerCommunity(Community):
         self.current_nonce = payload.nonce
         self.nonce_event.set()
 
+    # handler for the submitter forwarding the nonce to a non submitter
     def on_nonce_share(self, source_address, data):
         payload = self._unpack(NonceShare, data, source_address, MEMBER_KEYS)
         if payload is None or payload.round_number != self.current_round:
@@ -192,6 +210,7 @@ class SignerCommunity(Community):
         self.current_nonce = payload.nonce
         self.nonce_event.set()
 
+    # handler for a teammate signature received by the submitter
     def on_signature_share(self, source_address, data):
         payload = self._unpack(SignatureShare, data, source_address, MEMBER_KEYS)
         if payload is None or payload.round_number != self.current_round:
@@ -200,6 +219,7 @@ class SignerCommunity(Community):
         if len(self.signatures) == 3:
             self.sigs_event.set()
 
+    # handler for the server verdict on a bundle or early rejection
     def on_round_result(self, source_address, data):
         payload = self._unpack(RoundResult, data, source_address, (SERVER_PUBLIC_KEY,))
         if payload is None:
@@ -208,6 +228,7 @@ class SignerCommunity(Community):
         print(f"Round {payload.round_number} [{status}]: {payload.message}")
         self.round_done_event.set()
 
+    # blocks the driver until both teammates and the server are discovered
     async def _wait_for_peers(self) -> None:
         teammates = [i for i in (1, 2, 3) if i != self.my_member_index]
         while True:
@@ -215,6 +236,7 @@ class SignerCommunity(Community):
                 return
             await asyncio.sleep(0.5)
 
+    # main driver looping the three rounds and dispatching by role
     async def run_rounds(self) -> None:
         print(
             f"{'=' * 80}\nLAB 2 SIGNATURE CLIENT\n{'=' * 80}\n"
@@ -245,6 +267,7 @@ class SignerCommunity(Community):
         print(f"{'-' * 80}\n{'Total Time':<14}: {elapsed:.2f}s\n{'=' * 80}")
         self.done.set()
 
+    # active path requesting challenge sharing nonce collecting sigs and submitting bundle
     async def _submitter_flow(self, round_num: int) -> None:
         server = self._server_peer()
         teammates = [i for i in (1, 2, 3) if i != self.my_member_index]
@@ -290,6 +313,7 @@ class SignerCommunity(Community):
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.round_done_event.wait(), timeout=1.0)
 
+    # passive path waiting for nonce signing and firing the signature three times
     async def _non_submitter_flow(self, round_num: int) -> None:
         await self.nonce_event.wait()
 
@@ -303,10 +327,10 @@ class SignerCommunity(Community):
                 )
                 await asyncio.sleep(0.05)
 
-        # non-submitters get no server feedback so mark done locally
+        # non submitters get no server feedback so mark done locally
         self.round_done_event.set()
 
-    # NOT called at runtime
+    # unused at runtime but kept for protocol completeness
     def _register_group(self) -> None:
         server = self._server_peer()
         if server is None:
@@ -316,6 +340,7 @@ class SignerCommunity(Community):
         )
 
 
+# wires up ipv8 starts the signer community and waits for the round protocol to finish
 async def main(pem_path: str, port: int) -> None:
     builder = (
         ConfigBuilder(clean=True)
