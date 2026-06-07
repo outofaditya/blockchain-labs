@@ -34,6 +34,16 @@ def compute_block_hash(header_bytes: bytes) -> bytes:
     return sha256(header_bytes).digest()
 
 
+def validate_block(block: Block, parent: Block) -> bool:
+    if block.prev_hash != compute_block_hash(pack_header(parent)):
+        return False
+    if block.txs_hash != compute_txs_hash(block.tx_hashes):
+        return False
+    return has_leading_zero_bits(
+        compute_block_hash(pack_header(block)), block.difficulty
+    )
+
+
 def compute_txs_hash(tx_hashes: tuple[bytes, ...]) -> bytes:
     if not tx_hashes:
         return _EMPTY_TXS_HASH
