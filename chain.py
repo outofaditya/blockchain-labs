@@ -108,6 +108,25 @@ class Chain:
         self._apply(block, compute_block_hash(pack_header(block)))
         return True
 
+    def adopt_fork(self, blocks: list[Block]) -> bool:
+        if len(blocks) <= len(self.blocks) or blocks[0] != GENESIS:
+            return False
+        new_by_hash = {GENESIS_HASH: GENESIS}
+        new_by_height = {0: GENESIS}
+        new_tip_hash = GENESIS_HASH
+        for height in range(1, len(blocks)):
+            block = blocks[height]
+            if not validate_block(block, blocks[height - 1]):
+                return False
+            new_tip_hash = compute_block_hash(pack_header(block))
+            new_by_hash[new_tip_hash] = block
+            new_by_height[height] = block
+        self.blocks = list(blocks)
+        self.by_hash = new_by_hash
+        self.by_height = new_by_height
+        self.tip_hash = new_tip_hash
+        return True
+
     def _apply(self, block: Block, block_hash: bytes) -> None:
         self.blocks.append(block)
         self.by_hash[block_hash] = block
