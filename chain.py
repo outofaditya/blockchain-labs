@@ -1,4 +1,5 @@
 from struct import Struct
+from hashlib import sha256
 from dataclasses import dataclass
 
 HEADER_FORMAT = ">32s32sQIQ"
@@ -24,3 +25,7 @@ def pack_header(block: Block) -> bytes:
         block.difficulty,
         block.nonce,
     )
+
+
+def compute_block_hash(header_bytes: bytes) -> bytes:
+    return sha256(header_bytes).digest()
