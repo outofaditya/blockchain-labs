@@ -201,18 +201,15 @@ class ChainCommunity(Community):
         ):
             self.add_message_handler(cls, handler)
 
-    # filters discovered peers down to the one matching the published server key
-    def _server_peer(self):
-        for p in self.get_peers():
-            if p.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
-                return p
-        return None
-
     # yields the currently discovered teammate peers excluding ourselves
     def _teammate_peers(self):
         for p in self.get_peers():
             if p.public_key.key_to_bin() in self._teammate_keys:
                 yield p
+
+    # convenience shortcut for the server identity lookup
+    def _server_peer(self):
+        return self._peer_with_key(SERVER_PUBLIC_KEY)
 
     # serializes a freshly mined block and pushes it to every discovered teammate
     def broadcast_block(self, block: Block, height: int) -> None:
@@ -302,30 +299,29 @@ class ChainCommunity(Community):
             ),
         )
 
-    # four way dispatch on try_extend driving extends rebroadcasts and walk back on missing parent
+    # gossip entry from a teammate broadcast triggers rebroadcast on success
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
         sender, payload = self._unpack(NewBlock, data, source_address, MEMBER_KEYS)
-        if payload is None:
-            return
-        block = self._block_from_wire(payload)
-        block_hash = compute_block_hash(pack_header(block))
-        if block_hash in self._seen:
-            return
-        self._seen.add(block_hash)
-        status, parent_hash = self.chain.try_extend(block)
-        if status is AppendStatus.EXTENDS_TIP:
-            self.mempool.remove(list(block.tx_hashes))
-            self.broadcast_block(block, payload.height)
-            self._drain_pending(block)
-        elif status is AppendStatus.NEEDS_PARENT:
-            self._kick_walk_back(sender, block, parent_hash, payload.height)
+        if payload is not None:
+            self._ingest_block(
+                sender, self._block_from_wire(payload), payload.height, rebroadcast=True
+            )
 
-    # ingests walk back replies and either extends or recurses deeper into chain history
+    # walk back reply we asked for so no rebroadcast on success
     def on_block_response(self, source_address: tuple, data: bytes) -> None:
         sender, payload = self._unpack(BlockResponse, data, source_address, MEMBER_KEYS)
-        if payload is None:
-            return
-        block = self._block_from_wire(payload)
+        if payload is not None:
+            self._ingest_block(
+                sender,
+                self._block_from_wire(payload),
+                payload.height,
+                rebroadcast=False,
+            )
+
+    # shared dedup plus try_extend dispatcher used by both gossip and walk back paths
+    def _ingest_block(
+        self, sender_key: bytes, block: Block, height: int, rebroadcast: bool
+    ) -> None:
         block_hash = compute_block_hash(pack_header(block))
         if block_hash in self._seen:
             return
@@ -333,9 +329,11 @@ class ChainCommunity(Community):
         status, parent_hash = self.chain.try_extend(block)
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
+            if rebroadcast:
+                self.broadcast_block(block, height)
             self._drain_pending(block)
         elif status is AppendStatus.NEEDS_PARENT:
-            self._kick_walk_back(sender, block, parent_hash, payload.height)
+            self._kick_walk_back(sender_key, block, parent_hash, height)
 
     # reconstructs a Block from any wire payload sharing the canonical header fields
     def _block_from_wire(self, payload) -> Block:
