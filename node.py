@@ -2,7 +2,7 @@ import os
 import logging
 import dataclasses
 
-from ipv8.messaging.payload_dataclass import DataClassPayload
+from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -90,3 +90,28 @@ class BlockResponse(DataClassPayload[6]):
     nonce: int
     block_hash: bytes
     tx_hashes: bytes
+
+
+# internal gossip block we broadcast to teammates when we mine
+@dataclasses.dataclass
+class NewBlock(DataClassPayload[100]):
+    prev_hash: bytes
+    txs_hash: bytes
+    timestamp: int
+    difficulty: int
+    nonce: int
+    tx_hashes: bytes
+
+
+for cls in (
+    RegisterBlockchain,
+    RegisterResponse,
+    SubmitTransaction,
+    SubmitTransactionResponse,
+    GetChainHeight,
+    ChainHeightResponse,
+    GetBlock,
+    BlockResponse,
+    NewBlock,
+):
+    convert_to_payload(cls)
