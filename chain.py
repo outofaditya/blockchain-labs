@@ -1,7 +1,9 @@
 from struct import Struct
-from enum import Enum, auto
 from hashlib import sha256
+from enum import Enum, auto
 from dataclasses import dataclass
+
+from ipv8.keyvault.crypto import default_eccrypto
 
 _U64_STRUCT = Struct(">Q")
 _PREFIX_STRUCT = Struct(">32s32sQI")
@@ -173,6 +175,16 @@ class Chain:
         return AppendStatus.EXTENDS_TIP, None
 
 
+# verifies the ed25519 signature over sender_key data and timestamp at the mempool boundary
+def verify_tx(tx: Tx) -> bool:
+    try:
+        pubkey = default_eccrypto.key_from_public_bin(tx.sender_key)
+        msg = tx.sender_key + tx.data + _U64_STRUCT.pack(tx.timestamp)
+        return bool(default_eccrypto.is_valid_signature(pubkey, msg, tx.signature))
+    except Exception:
+        return False
+
+
 # per node buffer of unconfirmed transactions deduped by tx_hash
 class Mempool:
     # starts empty waiting for incoming transactions
@@ -183,8 +195,10 @@ class Mempool:
     def __len__(self) -> int:
         return len(self.pending)
 
-    # rejects duplicates by tx_hash so gossip replays do not double queue
+    # gates on signature then dedups so the mempool only holds authenticated txs
     def add(self, tx: Tx) -> bool:
+        if not verify_tx(tx):
+            return False
         h = compute_tx_hash(tx.sender_key, tx.data, tx.timestamp, tx.signature)
         if h in self.pending:
             return False
