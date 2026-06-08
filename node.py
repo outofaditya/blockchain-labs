@@ -13,7 +13,7 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from chain import Chain, Mempool
+from chain import Tx, Chain, Mempool, pack_header, compute_tx_hash, compute_block_hash
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -183,17 +183,75 @@ class ChainCommunity(Community):
         ):
             self.add_message_handler(cls, handler)
 
-    # stub for atom 6 will verify sig add to mempool and reply with tx_hash
+    # filters discovered peers down to the one matching the published server key
+    def _server_peer(self):
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
+                return p
+        return None
+
+    # shared decode and sender check for every server originated payload
+    def _unpack_from_server(self, payload_cls, data, source_address):
+        try:
+            auth, _, payload = self._ez_unpack_auth(payload_cls, data)
+        except Exception as e:
+            logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
+            return None
+        if auth.public_key_bin != SERVER_PUBLIC_KEY:
+            return None
+        return payload
+
+    # rebuilds the tx from the wire fields and gates it through the mempool signature check
     def on_submit_transaction(self, source_address: tuple, data: bytes) -> None:
-        print(f"[chain] SubmitTransaction from {source_address}")
+        payload = self._unpack_from_server(SubmitTransaction, data, source_address)
+        server = self._server_peer()
+        if payload is None or server is None:
+            return
+        tx = Tx(payload.sender_key, payload.data, payload.timestamp, payload.signature)
+        if self.mempool.add(tx):
+            tx_hash = compute_tx_hash(
+                tx.sender_key, tx.data, tx.timestamp, tx.signature
+            )
+            self.ez_send(server, SubmitTransactionResponse(True, tx_hash, "accepted"))
+        else:
+            self.ez_send(server, SubmitTransactionResponse(False, b"", "rejected"))
 
-    # stub for atom 6 will reply with current height and tip hash
+    # echoes back the request_id so the server can match concurrent queries
     def on_get_chain_height(self, source_address: tuple, data: bytes) -> None:
-        print(f"[chain] GetChainHeight from {source_address}")
+        payload = self._unpack_from_server(GetChainHeight, data, source_address)
+        server = self._server_peer()
+        if payload is None or server is None:
+            return
+        self.ez_send(
+            server,
+            ChainHeightResponse(
+                payload.request_id, self.chain.height, self.chain.tip_hash
+            ),
+        )
 
-    # stub for atom 6 will reply with the block at that height
+    # serializes the block body by concatenating its 32 byte tx hashes
     def on_get_block(self, source_address: tuple, data: bytes) -> None:
-        print(f"[chain] GetBlock from {source_address}")
+        payload = self._unpack_from_server(GetBlock, data, source_address)
+        server = self._server_peer()
+        if payload is None or server is None:
+            return
+        block = self.chain.by_height.get(payload.height)
+        if block is None:
+            return
+        block_hash = compute_block_hash(pack_header(block))
+        self.ez_send(
+            server,
+            BlockResponse(
+                payload.height,
+                block.prev_hash,
+                block.txs_hash,
+                block.timestamp,
+                block.difficulty,
+                block.nonce,
+                block_hash,
+                b"".join(block.tx_hashes),
+            ),
+        )
 
     # stub for atom 7 will try_extend and rebroadcast on success
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
