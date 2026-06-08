@@ -1,4 +1,6 @@
 import os
+import time
+import asyncio
 from struct import Struct
 from hashlib import sha256
 from enum import Enum, auto
@@ -271,6 +273,29 @@ def assemble_candidate(
 ) -> tuple[bytes, tuple[bytes, ...]]:
     tx_hashes = tuple(h for h, _ in mempool.take(max_txs))
     return compute_txs_hash(tx_hashes), tx_hashes
+
+
+# continuously mines blocks against the current tip until stop_event is set
+async def mining_loop(
+    chain: Chain,
+    mempool: Mempool,
+    difficulty: int,
+    broadcast=None,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    loop = asyncio.get_event_loop()
+    while stop_event is None or not stop_event.is_set():
+        prev_hash = chain.tip_hash
+        txs_hash, tx_hashes = assemble_candidate(mempool)
+        timestamp = int(time.time())
+        nonce, _ = await loop.run_in_executor(
+            None, mine_block_parallel, prev_hash, txs_hash, difficulty, timestamp
+        )
+        block = Block(prev_hash, txs_hash, timestamp, difficulty, nonce, tx_hashes)
+        if chain.append(block):
+            mempool.remove(list(tx_hashes))
+            if broadcast is not None:
+                await broadcast(block)
 
 
 if __name__ == "__main__":
