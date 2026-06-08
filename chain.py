@@ -9,6 +9,15 @@ _HEADER_STRUCT = Struct(">32s32sQIQ")
 _EMPTY_TXS_HASH = sha256(b"").digest()
 
 
+# signed transaction frozen so its signature and tx_hash stay stable
+@dataclass(frozen=True)
+class Tx:
+    sender_key: bytes
+    data: bytes
+    timestamp: int
+    signature: bytes
+
+
 # immutable header fields plus body tx hashes so the chain stays tamper evident
 @dataclass(frozen=True)
 class Block:
@@ -162,6 +171,34 @@ class Chain:
             return AppendStatus.INVALID, None
         self._apply(block, block_hash)
         return AppendStatus.EXTENDS_TIP, None
+
+
+# per node buffer of unconfirmed transactions deduped by tx_hash
+class Mempool:
+    # starts empty waiting for incoming transactions
+    def __init__(self) -> None:
+        self.pending: dict[bytes, Tx] = {}
+
+    # convenience for empty checks and progress logging
+    def __len__(self) -> int:
+        return len(self.pending)
+
+    # rejects duplicates by tx_hash so gossip replays do not double queue
+    def add(self, tx: Tx) -> bool:
+        h = compute_tx_hash(tx.sender_key, tx.data, tx.timestamp, tx.signature)
+        if h in self.pending:
+            return False
+        self.pending[h] = tx
+        return True
+
+    # drops included txs once a block has successfully landed
+    def remove(self, tx_hashes: list[bytes]) -> None:
+        for h in tx_hashes:
+            self.pending.pop(h, None)
+
+    # returns oldest first using dict insertion order without removing
+    def take(self, max_count: int) -> list[tuple[bytes, Tx]]:
+        return list(self.pending.items())[:max_count]
 
 
 if __name__ == "__main__":
