@@ -153,6 +153,7 @@ class RegistrationCommunity(Community):
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.registered = False
+        self.rekicked = False
         self.add_message_handler(RegisterResponse, self.on_register_response)
         self.register_task("register", self._register, interval=2.0, delay=3.0)
 
@@ -169,6 +170,14 @@ class RegistrationCommunity(Community):
             return
         self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
 
+    # second registration fires after discovery settles so the server retry budget resets
+    async def _rekick(self) -> None:
+        server = self._server_peer()
+        if server is None:
+            return
+        print("Registration: re-registering to reset the server retry budget")
+        self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
+
     # verifies the reply came from the published server key then prints the verdict
     def on_register_response(self, source_address: tuple, data: bytes) -> None:
         try:
@@ -181,6 +190,9 @@ class RegistrationCommunity(Community):
         status = "OK" if payload.success else "FAIL"
         print(f"Registration [{status}]: {payload.message}")
         self.registered = True
+        if not self.rekicked:
+            self.rekicked = True
+            self.register_task("rekick", self._rekick, delay=60.0)
 
 
 # main overlay holding the chain mempool and the four handlers for server and gossip messages
