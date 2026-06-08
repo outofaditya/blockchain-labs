@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import logging
 import dataclasses
@@ -39,8 +40,11 @@ CHAIN_COMMUNITY_ID = b"QuickFoxJumpsLazyDog"
 # group identity carried over from lab 2 since the lab 3 server checks group membership
 GROUP_ID = "814ee89d4621f005"
 
-# low enough for blocks to land in subseconds high enough for the optimizations to matter
-MINING_DIFFICULTY = 12
+# tuned so each block takes a few seconds making the demo readable in real time
+MINING_DIFFICULTY = 18
+
+# blocks to mine after a server transaction one for the tx plus three confirmations
+CONFIRMATION_DEPTH = 4
 
 # members in registration order
 MEMBER_KEYS_HEX = [
@@ -192,6 +196,8 @@ class ChainCommunity(Community):
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
         self._pending: dict[bytes, Block] = {}
         self._seen: set[bytes] = set()
+        self._mining_gate = asyncio.Event()
+        self._mining_target = 0
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
@@ -200,6 +206,24 @@ class ChainCommunity(Community):
             (BlockResponse, self.on_block_response),
         ):
             self.add_message_handler(cls, handler)
+
+    # one line structured log with a wall clock prefix for cross terminal correlation
+    def _log(self, event: str, detail: str = "") -> None:
+        print(f"[{time.strftime('%H:%M:%S')}] {event:<11} {detail}")
+
+    # opens the gate so mining_loop runs until the chain reaches the new target
+    def _enable_mining(self, target: int) -> None:
+        if target <= self._mining_target:
+            return
+        self._mining_target = target
+        self._mining_gate.set()
+        self._log("MINING", f"enabled target_height={target}")
+
+    # closes the gate once the chain has caught up with the target
+    def _maybe_pause_mining(self) -> None:
+        if self._mining_gate.is_set() and self.chain.height >= self._mining_target:
+            self._mining_gate.clear()
+            self._log("MINING", f"paused tip_height={self.chain.height}")
 
     # yields the currently discovered teammate peers excluding ourselves
     def _teammate_peers(self):
@@ -251,10 +275,12 @@ class ChainCommunity(Community):
         server = self._server_peer()
         if payload is None or server is None:
             return
+        self._log("SERVER", "SubmitTransaction")
         tx = Tx(payload.sender_key, payload.data, payload.timestamp, payload.signature)
         tx_hash = self.mempool.add(tx)
         if tx_hash is not None:
             self.ez_send(server, SubmitTransactionResponse(True, tx_hash, "accepted"))
+            self._enable_mining(self.chain.height + CONFIRMATION_DEPTH)
         else:
             self.ez_send(server, SubmitTransactionResponse(False, b"", "rejected"))
 
@@ -266,6 +292,7 @@ class ChainCommunity(Community):
         server = self._server_peer()
         if payload is None or server is None:
             return
+        self._log("SERVER", f"GetChainHeight request_id={payload.request_id}")
         self.ez_send(
             server,
             ChainHeightResponse(
@@ -280,6 +307,8 @@ class ChainCommunity(Community):
         )
         if payload is None:
             return
+        origin = "SERVER" if sender == SERVER_PUBLIC_KEY else "PEER"
+        self._log(f"{origin}", f"GetBlock height={payload.height}")
         block = self.chain.by_height.get(payload.height)
         target = self._peer_with_key(sender)
         if block is None or target is None:
@@ -302,21 +331,25 @@ class ChainCommunity(Community):
     # gossip entry from a teammate broadcast triggers rebroadcast on success
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
         sender, payload = self._unpack(NewBlock, data, source_address, MEMBER_KEYS)
-        if payload is not None:
-            self._ingest_block(
-                sender, self._block_from_wire(payload), payload.height, rebroadcast=True
-            )
+        if payload is None:
+            return
+        self._log("RECV", f"NewBlock height={payload.height}")
+        self._ingest_block(
+            sender, self._block_from_wire(payload), payload.height, rebroadcast=True
+        )
 
     # walk back reply we asked for so no rebroadcast on success
     def on_block_response(self, source_address: tuple, data: bytes) -> None:
         sender, payload = self._unpack(BlockResponse, data, source_address, MEMBER_KEYS)
-        if payload is not None:
-            self._ingest_block(
-                sender,
-                self._block_from_wire(payload),
-                payload.height,
-                rebroadcast=False,
-            )
+        if payload is None:
+            return
+        self._log("PARENT_RECV", f"height={payload.height}")
+        self._ingest_block(
+            sender,
+            self._block_from_wire(payload),
+            payload.height,
+            rebroadcast=False,
+        )
 
     # shared dedup plus try_extend dispatcher used by both gossip and walk back paths
     def _ingest_block(
@@ -329,9 +362,11 @@ class ChainCommunity(Community):
         status, parent_hash = self.chain.try_extend(block)
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
+            self._log("EXTEND", f"height={self.chain.height}")
             if rebroadcast:
                 self.broadcast_block(block, height)
             self._drain_pending(block)
+            self._maybe_pause_mining()
         elif status is AppendStatus.NEEDS_PARENT:
             self._kick_walk_back(sender_key, block, parent_hash, height)
 
@@ -358,6 +393,7 @@ class ChainCommunity(Community):
         self._pending[parent_hash] = orphan
         target = self._peer_with_key(sender_key)
         if target is not None:
+            self._log("PARENT_REQ", f"height={orphan_height - 1}")
             self.ez_send(target, GetBlock(orphan_height - 1))
 
     # after a block lands replays any orphans that were waiting on its hash
@@ -402,7 +438,10 @@ async def main(pem_path: str, port: int) -> None:
     chain_overlay = ipv8.get_overlay(ChainCommunity)
 
     async def broadcast(block: Block) -> None:
-        chain_overlay.broadcast_block(block, chain_overlay.chain.height)
+        height = chain_overlay.chain.height
+        chain_overlay._log("MINED", f"height={height} nonce={block.nonce}")
+        chain_overlay.broadcast_block(block, height)
+        chain_overlay._maybe_pause_mining()
 
     asyncio.create_task(
         mining_loop(
@@ -410,6 +449,7 @@ async def main(pem_path: str, port: int) -> None:
             chain_overlay.mempool,
             MINING_DIFFICULTY,
             broadcast,
+            gate=chain_overlay._mining_gate,
         )
     )
 
@@ -421,7 +461,7 @@ async def main(pem_path: str, port: int) -> None:
         f"{'Chain ID':<12}: {CHAIN_COMMUNITY_ID.decode()}\n"
         f"{'Difficulty':<12}: {MINING_DIFFICULTY} leading zero bits\n"
         f"{'Public Key':<12}: {chain_overlay.my_peer.public_key.key_to_bin().hex()}\n"
-        f"{'-' * 80}\nBOTH COMMUNITIES JOINED AND MINING\n{'-' * 80}"
+        f"{'-' * 80}\nIDLE UNTIL SERVER SUBMITS A TRANSACTION\n{'-' * 80}"
     )
 
     # never set so the node runs until ctrl c
