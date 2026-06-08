@@ -132,11 +132,12 @@ for cls in (
 class RegistrationCommunity(Community):
     community_id = REGISTRATION_COMMUNITY_ID
 
-    # binds the handler and tracks whether we have heard back from the server
+    # binds the handler and schedules the retry until the server replies once
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.registered = False
         self.add_message_handler(RegisterResponse, self.on_register_response)
+        self.register_task("register", self._register, interval=2.0, delay=3.0)
 
     # filters discovered peers down to the one matching the published server key
     def _server_peer(self):
@@ -162,6 +163,7 @@ class RegistrationCommunity(Community):
             return
         status = "OK" if payload.success else "FAIL"
         print(f"Registration [{status}]: {payload.message}")
+        self.registered = True
 
 
 # main overlay holding the chain mempool and the four handlers for server and gossip messages
