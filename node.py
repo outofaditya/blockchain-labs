@@ -114,6 +114,7 @@ class BlockResponse(DataClassPayload[6]):
 # internal gossip block we broadcast to teammates when we mine
 @dataclasses.dataclass
 class NewBlock(DataClassPayload[100]):
+    height: int
     prev_hash: bytes
     txs_hash: bytes
     timestamp: int
@@ -178,18 +179,20 @@ class RegistrationCommunity(Community):
 class ChainCommunity(Community):
     community_id = CHAIN_COMMUNITY_ID
 
-    # owns the chain and mempool then wires all four handlers in one loop
+    # owns the chain and mempool wires all handlers and prepares the walk back buffer
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.chain = Chain()
         self.mempool = Mempool()
         my_key = self.my_peer.public_key.key_to_bin()
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
+        self._pending: dict[bytes, Block] = {}
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
             (GetBlock, self.on_get_block),
             (NewBlock, self.on_new_block),
+            (BlockResponse, self.on_block_response),
         ):
             self.add_message_handler(cls, handler)
 
@@ -207,8 +210,9 @@ class ChainCommunity(Community):
                 yield p
 
     # serializes a freshly mined block and pushes it to every discovered teammate
-    def broadcast_block(self, block: Block) -> None:
+    def broadcast_block(self, block: Block, height: int) -> None:
         payload = NewBlock(
+            height,
             block.prev_hash,
             block.txs_hash,
             block.timestamp,
@@ -219,31 +223,29 @@ class ChainCommunity(Community):
         for peer in self._teammate_peers():
             self.ez_send(peer, payload)
 
-    # shared decode and sender check for every server originated payload
-    def _unpack_from_server(self, payload_cls, data, source_address):
-        try:
-            auth, _, payload = self._ez_unpack_auth(payload_cls, data)
-        except Exception as e:
-            logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
-            return None
-        if auth.public_key_bin != SERVER_PUBLIC_KEY:
-            return None
-        return payload
+    # resolves the peer matching a verified sender key for replies
+    def _peer_with_key(self, pubkey: bytes):
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() == pubkey:
+                return p
+        return None
 
-    # shared decode and sender check for payloads coming from a registered teammate
-    def _unpack_from_member(self, payload_cls, data, source_address):
+    # generic decode plus sender check returns (sender_key, payload) or (None, None)
+    def _unpack(self, payload_cls, data, source_address, allowed):
         try:
             auth, _, payload = self._ez_unpack_auth(payload_cls, data)
         except Exception as e:
             logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
-            return None
-        if auth.public_key_bin not in MEMBER_KEYS:
-            return None
-        return payload
+            return None, None
+        if auth.public_key_bin not in allowed:
+            return None, None
+        return auth.public_key_bin, payload
 
     # rebuilds the tx from the wire fields and gates it through the mempool signature check
     def on_submit_transaction(self, source_address: tuple, data: bytes) -> None:
-        payload = self._unpack_from_server(SubmitTransaction, data, source_address)
+        _, payload = self._unpack(
+            SubmitTransaction, data, source_address, (SERVER_PUBLIC_KEY,)
+        )
         server = self._server_peer()
         if payload is None or server is None:
             return
@@ -256,7 +258,9 @@ class ChainCommunity(Community):
 
     # echoes back the request_id so the server can match concurrent queries
     def on_get_chain_height(self, source_address: tuple, data: bytes) -> None:
-        payload = self._unpack_from_server(GetChainHeight, data, source_address)
+        _, payload = self._unpack(
+            GetChainHeight, data, source_address, (SERVER_PUBLIC_KEY,)
+        )
         server = self._server_peer()
         if payload is None or server is None:
             return
@@ -267,18 +271,20 @@ class ChainCommunity(Community):
             ),
         )
 
-    # serializes the block body by concatenating its 32 byte tx hashes
+    # serves both the server's grading queries and teammate walk-back requests
     def on_get_block(self, source_address: tuple, data: bytes) -> None:
-        payload = self._unpack_from_server(GetBlock, data, source_address)
-        server = self._server_peer()
-        if payload is None or server is None:
+        sender, payload = self._unpack(
+            GetBlock, data, source_address, (SERVER_PUBLIC_KEY, *MEMBER_KEYS)
+        )
+        if payload is None:
             return
         block = self.chain.by_height.get(payload.height)
-        if block is None:
+        target = self._peer_with_key(sender)
+        if block is None or target is None:
             return
         block_hash = compute_block_hash(pack_header(block))
         self.ez_send(
-            server,
+            target,
             BlockResponse(
                 payload.height,
                 block.prev_hash,
@@ -291,15 +297,39 @@ class ChainCommunity(Community):
             ),
         )
 
-    # four-way dispatcher driving extends rebroadcasts and walk-back on missing parent
+    # four way dispatch on try_extend driving extends rebroadcasts and walk back on missing parent
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
-        payload = self._unpack_from_member(NewBlock, data, source_address)
+        sender, payload = self._unpack(NewBlock, data, source_address, MEMBER_KEYS)
         if payload is None:
             return
+        block = self._block_from_wire(payload)
+        status, parent_hash = self.chain.try_extend(block)
+        if status is AppendStatus.EXTENDS_TIP:
+            self.mempool.remove(list(block.tx_hashes))
+            self.broadcast_block(block, payload.height)
+            self._drain_pending(block)
+        elif status is AppendStatus.NEEDS_PARENT:
+            self._kick_walk_back(sender, block, parent_hash, payload.height)
+
+    # ingests walk back replies and either extends or recurses deeper into chain history
+    def on_block_response(self, source_address: tuple, data: bytes) -> None:
+        sender, payload = self._unpack(BlockResponse, data, source_address, MEMBER_KEYS)
+        if payload is None:
+            return
+        block = self._block_from_wire(payload)
+        status, parent_hash = self.chain.try_extend(block)
+        if status is AppendStatus.EXTENDS_TIP:
+            self.mempool.remove(list(block.tx_hashes))
+            self._drain_pending(block)
+        elif status is AppendStatus.NEEDS_PARENT:
+            self._kick_walk_back(sender, block, parent_hash, payload.height)
+
+    # reconstructs a Block from any wire payload sharing the canonical header fields
+    def _block_from_wire(self, payload) -> Block:
         tx_hashes = tuple(
             payload.tx_hashes[i : i + 32] for i in range(0, len(payload.tx_hashes), 32)
         )
-        block = Block(
+        return Block(
             payload.prev_hash,
             payload.txs_hash,
             payload.timestamp,
@@ -307,11 +337,29 @@ class ChainCommunity(Community):
             payload.nonce,
             tx_hashes,
         )
-        status, _parent = self.chain.try_extend(block)
-        if status is AppendStatus.EXTENDS_TIP:
-            self.mempool.remove(list(tx_hashes))
-            self.broadcast_block(block)
-        # KNOWN_BLOCK and INVALID drop silently; NEEDS_PARENT walk-back lands in atom 7 task 40
+
+    # buffers the orphan and requests its claimed parent so we can fill the gap
+    def _kick_walk_back(
+        self, sender_key: bytes, orphan: Block, parent_hash: bytes, orphan_height: int
+    ) -> None:
+        if parent_hash in self._pending:
+            return
+        self._pending[parent_hash] = orphan
+        target = self._peer_with_key(sender_key)
+        if target is not None:
+            self.ez_send(target, GetBlock(orphan_height - 1))
+
+    # after a block lands replays any orphans that were waiting on its hash
+    def _drain_pending(self, applied: Block) -> None:
+        applied_hash = compute_block_hash(pack_header(applied))
+        orphan = self._pending.pop(applied_hash, None)
+        while orphan is not None:
+            status, _ = self.chain.try_extend(orphan)
+            if status is not AppendStatus.EXTENDS_TIP:
+                return
+            self.mempool.remove(list(orphan.tx_hashes))
+            applied_hash = compute_block_hash(pack_header(orphan))
+            orphan = self._pending.pop(applied_hash, None)
 
 
 # boots ipv8 with both overlays bound to the same key and blocks forever
