@@ -357,4 +357,30 @@ if __name__ == "__main__":
     assert chain.tip is fork[-1]
     assert chain.by_height[3] is fork[3]
 
+    # real tx flows through mempool mining and clears once a block lands
+    async def _integration() -> None:
+        c = Chain()
+        m = Mempool()
+        stop = asyncio.Event()
+
+        key = default_eccrypto.generate_key("curve25519")
+        sender = key.pub().key_to_bin()
+        data = b"hello chain"
+        ts = NOW + 500
+        sig = default_eccrypto.create_signature(
+            key, sender + data + ts.to_bytes(8, "big")
+        )
+        expected = compute_tx_hash(sender, data, ts, sig)
+        assert m.add(Tx(sender, data, ts, sig))
+
+        async def stop_after(_blk: Block) -> None:
+            stop.set()
+
+        await mining_loop(c, m, 8, stop_after, stop)
+        assert c.height == 1
+        assert len(m) == 0
+        assert c.tip.tx_hashes == (expected,)
+
+    asyncio.run(_integration())
+
     print("tests passed!")
