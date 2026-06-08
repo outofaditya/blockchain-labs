@@ -215,6 +215,14 @@ class Mempool:
         return list(self.pending.items())[:max_count]
 
 
+# snapshots up to max_txs from the mempool and precomputes the body commitment for mining
+def assemble_candidate(
+    mempool: Mempool, max_txs: int = 1000
+) -> tuple[bytes, tuple[bytes, ...]]:
+    tx_hashes = tuple(h for h, _ in mempool.take(max_txs))
+    return compute_txs_hash(tx_hashes), tx_hashes
+
+
 if __name__ == "__main__":
     from os import urandom
 
