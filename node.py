@@ -1,7 +1,15 @@
 import os
+import asyncio
 import logging
 import dataclasses
 
+from ipv8_service import IPv8
+from ipv8.configuration import (
+    Strategy,
+    ConfigBuilder,
+    WalkerDefinition,
+    default_bootstrap_defs,
+)
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
@@ -174,3 +182,58 @@ class ChainCommunity(Community):
     # stub for atom 7 will try_extend and rebroadcast on success
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
         print(f"[chain] NewBlock from {source_address}")
+
+
+# boots ipv8 with both overlays bound to the same key and blocks forever
+async def main(pem_path: str, port: int) -> None:
+    walker = [WalkerDefinition(Strategy.RandomWalk, 20, {"timeout": 3.0})]
+    builder = (
+        ConfigBuilder(clean=True)
+        .set_port(port)
+        .set_address("0.0.0.0")
+        .set_log_level("CRITICAL")
+        .set_walker_interval(0.5)
+        .set_working_directory(_DIR)
+        .add_key("my key", "curve25519", pem_path)
+        .add_overlay(
+            "RegistrationCommunity", "my key", walker, default_bootstrap_defs, {}, []
+        )
+        .add_overlay("ChainCommunity", "my key", walker, default_bootstrap_defs, {}, [])
+    )
+
+    ipv8 = IPv8(
+        builder.finalize(),
+        extra_communities={
+            "RegistrationCommunity": RegistrationCommunity,
+            "ChainCommunity": ChainCommunity,
+        },
+    )
+    await ipv8.start()
+
+    chain_overlay = ipv8.get_overlay(ChainCommunity)
+    print(
+        f"{'=' * 80}\nLAB 3 BLOCKCHAIN NODE\n{'=' * 80}\n"
+        f"{'Key File':<12}: {pem_path}\n"
+        f"{'Port':<12}: {port}\n"
+        f"{'Group ID':<12}: {GROUP_ID}\n"
+        f"{'Chain ID':<12}: {CHAIN_COMMUNITY_ID.decode()}\n"
+        f"{'Public Key':<12}: {chain_overlay.my_peer.public_key.key_to_bin().hex()}\n"
+        f"{'-' * 80}\nBOTH COMMUNITIES JOINED\n{'-' * 80}"
+    )
+
+    # never set so the node runs until ctrl c
+    await asyncio.Event().wait()
+    await ipv8.stop()
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 3:
+        print("Usage: python node.py <pem_path> <port>")
+        print("Example: python node.py key.pem 8094")
+        sys.exit(1)
+
+    pem_path = sys.argv[1]
+    port = int(sys.argv[2])
+    asyncio.run(main(pem_path, port))
