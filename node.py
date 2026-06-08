@@ -13,7 +13,15 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from chain import Tx, Block, Chain, Mempool, pack_header, compute_block_hash
+from chain import (
+    Tx,
+    Block,
+    Chain,
+    Mempool,
+    AppendStatus,
+    pack_header,
+    compute_block_hash,
+)
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -222,6 +230,17 @@ class ChainCommunity(Community):
             return None
         return payload
 
+    # shared decode and sender check for payloads coming from a registered teammate
+    def _unpack_from_member(self, payload_cls, data, source_address):
+        try:
+            auth, _, payload = self._ez_unpack_auth(payload_cls, data)
+        except Exception as e:
+            logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
+            return None
+        if auth.public_key_bin not in MEMBER_KEYS:
+            return None
+        return payload
+
     # rebuilds the tx from the wire fields and gates it through the mempool signature check
     def on_submit_transaction(self, source_address: tuple, data: bytes) -> None:
         payload = self._unpack_from_server(SubmitTransaction, data, source_address)
@@ -272,9 +291,27 @@ class ChainCommunity(Community):
             ),
         )
 
-    # stub for atom 7 will try_extend and rebroadcast on success
+    # four-way dispatcher driving extends rebroadcasts and walk-back on missing parent
     def on_new_block(self, source_address: tuple, data: bytes) -> None:
-        print(f"[chain] NewBlock from {source_address}")
+        payload = self._unpack_from_member(NewBlock, data, source_address)
+        if payload is None:
+            return
+        tx_hashes = tuple(
+            payload.tx_hashes[i : i + 32] for i in range(0, len(payload.tx_hashes), 32)
+        )
+        block = Block(
+            payload.prev_hash,
+            payload.txs_hash,
+            payload.timestamp,
+            payload.difficulty,
+            payload.nonce,
+            tx_hashes,
+        )
+        status, _parent = self.chain.try_extend(block)
+        if status is AppendStatus.EXTENDS_TIP:
+            self.mempool.remove(list(tx_hashes))
+            self.broadcast_block(block)
+        # KNOWN_BLOCK and INVALID drop silently; NEEDS_PARENT walk-back lands in atom 7 task 40
 
 
 # boots ipv8 with both overlays bound to the same key and blocks forever
