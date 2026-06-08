@@ -132,10 +132,18 @@ for cls in (
 class RegistrationCommunity(Community):
     community_id = REGISTRATION_COMMUNITY_ID
 
-    # binds the handler so the server reply gets routed back to us
+    # binds the handler and tracks whether we have heard back from the server
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
+        self.registered = False
         self.add_message_handler(RegisterResponse, self.on_register_response)
+
+    # filters discovered peers down to the one matching the published server key
+    def _server_peer(self):
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
+                return p
+        return None
 
     # verifies the reply came from the published server key then prints the verdict
     def on_register_response(self, source_address: tuple, data: bytes) -> None:
