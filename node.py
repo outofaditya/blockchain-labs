@@ -145,6 +145,12 @@ class RegistrationCommunity(Community):
                 return p
         return None
 
+    # one shot send guarded by registered flag and server peer discovery
+    async def _register(self) -> None:
+        if self.registered or (server := self._server_peer()) is None:
+            return
+        self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
+
     # verifies the reply came from the published server key then prints the verdict
     def on_register_response(self, source_address: tuple, data: bytes) -> None:
         try:
