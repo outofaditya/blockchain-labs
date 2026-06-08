@@ -5,6 +5,8 @@ import dataclasses
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
+from chain import Chain, Mempool
+
 logging.basicConfig(level=logging.CRITICAL)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -138,3 +140,37 @@ class RegistrationCommunity(Community):
             return
         status = "OK" if payload.success else "FAIL"
         print(f"Registration [{status}]: {payload.message}")
+
+
+# main overlay holding the chain mempool and the four handlers for server and gossip messages
+class ChainCommunity(Community):
+    community_id = CHAIN_COMMUNITY_ID
+
+    # owns the chain and mempool then wires all four handlers in one loop
+    def __init__(self, settings: CommunitySettings) -> None:
+        super().__init__(settings)
+        self.chain = Chain()
+        self.mempool = Mempool()
+        for cls, handler in (
+            (SubmitTransaction, self.on_submit_transaction),
+            (GetChainHeight, self.on_get_chain_height),
+            (GetBlock, self.on_get_block),
+            (NewBlock, self.on_new_block),
+        ):
+            self.add_message_handler(cls, handler)
+
+    # stub for atom 6 will verify sig add to mempool and reply with tx_hash
+    def on_submit_transaction(self, source_address: tuple, data: bytes) -> None:
+        print(f"[chain] SubmitTransaction from {source_address}")
+
+    # stub for atom 6 will reply with current height and tip hash
+    def on_get_chain_height(self, source_address: tuple, data: bytes) -> None:
+        print(f"[chain] GetChainHeight from {source_address}")
+
+    # stub for atom 6 will reply with the block at that height
+    def on_get_block(self, source_address: tuple, data: bytes) -> None:
+        print(f"[chain] GetBlock from {source_address}")
+
+    # stub for atom 7 will try_extend and rebroadcast on success
+    def on_new_block(self, source_address: tuple, data: bytes) -> None:
+        print(f"[chain] NewBlock from {source_address}")
