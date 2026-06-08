@@ -2,6 +2,7 @@ import os
 import logging
 import dataclasses
 
+from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
 logging.basicConfig(level=logging.CRITICAL)
@@ -115,3 +116,25 @@ for cls in (
     NewBlock,
 ):
     convert_to_payload(cls)
+
+
+# light overlay used once to tell the lab 3 server about our chain community
+class RegistrationCommunity(Community):
+    community_id = REGISTRATION_COMMUNITY_ID
+
+    # binds the handler so the server reply gets routed back to us
+    def __init__(self, settings: CommunitySettings) -> None:
+        super().__init__(settings)
+        self.add_message_handler(RegisterResponse, self.on_register_response)
+
+    # verifies the reply came from the published server key then prints the verdict
+    def on_register_response(self, source_address: tuple, data: bytes) -> None:
+        try:
+            auth, _, payload = self._ez_unpack_auth(RegisterResponse, data)
+        except Exception as e:
+            logging.debug(f"Bad RegisterResponse from {source_address}: {e}")
+            return
+        if auth.public_key_bin != SERVER_PUBLIC_KEY:
+            return
+        status = "OK" if payload.success else "FAIL"
+        print(f"Registration [{status}]: {payload.message}")
