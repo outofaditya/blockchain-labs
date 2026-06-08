@@ -18,8 +18,9 @@ from chain import (
     Block,
     Chain,
     Mempool,
-    AppendStatus,
     pack_header,
+    mining_loop,
+    AppendStatus,
     compute_block_hash,
 )
 
@@ -37,6 +38,9 @@ CHAIN_COMMUNITY_ID = b"QuickFoxJumpsLazyDog"
 
 # group identity carried over from lab 2 since the lab 3 server checks group membership
 GROUP_ID = "814ee89d4621f005"
+
+# low enough for blocks to land in subseconds high enough for the optimizations to matter
+MINING_DIFFICULTY = 12
 
 # members in registration order
 MEMBER_KEYS_HEX = [
@@ -398,14 +402,28 @@ async def main(pem_path: str, port: int) -> None:
     await ipv8.start()
 
     chain_overlay = ipv8.get_overlay(ChainCommunity)
+
+    async def broadcast(block: Block) -> None:
+        chain_overlay.broadcast_block(block, chain_overlay.chain.height)
+
+    asyncio.create_task(
+        mining_loop(
+            chain_overlay.chain,
+            chain_overlay.mempool,
+            MINING_DIFFICULTY,
+            broadcast,
+        )
+    )
+
     print(
         f"{'=' * 80}\nLAB 3 BLOCKCHAIN NODE\n{'=' * 80}\n"
         f"{'Key File':<12}: {pem_path}\n"
         f"{'Port':<12}: {port}\n"
         f"{'Group ID':<12}: {GROUP_ID}\n"
         f"{'Chain ID':<12}: {CHAIN_COMMUNITY_ID.decode()}\n"
+        f"{'Difficulty':<12}: {MINING_DIFFICULTY} leading zero bits\n"
         f"{'Public Key':<12}: {chain_overlay.my_peer.public_key.key_to_bin().hex()}\n"
-        f"{'-' * 80}\nBOTH COMMUNITIES JOINED\n{'-' * 80}"
+        f"{'-' * 80}\nBOTH COMMUNITIES JOINED AND MINING\n{'-' * 80}"
     )
 
     # never set so the node runs until ctrl c
