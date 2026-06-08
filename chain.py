@@ -1,7 +1,9 @@
+import os
 from struct import Struct
 from hashlib import sha256
 from enum import Enum, auto
 from dataclasses import dataclass
+from multiprocessing import Event, Process, Queue
 
 from ipv8.keyvault.crypto import default_eccrypto
 
@@ -94,6 +96,54 @@ def mine_block(
         if has_leading_zero_bits(digest, difficulty):
             return nonce, digest
         nonce += 1
+
+
+# strided nonce search in a subprocess so multiple cores can race without overlap
+def _chain_worker(
+    prefix: bytes,
+    difficulty: int,
+    worker_id: int,
+    num_workers: int,
+    result_queue,
+    stop_event,
+) -> None:
+    base = sha256(prefix)
+    nonce = worker_id
+    while True:
+        h = base.copy()
+        h.update(_U64_STRUCT.pack(nonce))
+        digest = h.digest()
+        if has_leading_zero_bits(digest, difficulty):
+            result_queue.put((nonce, digest))
+            stop_event.set()
+            return
+        nonce += num_workers
+        if nonce & 0x3FFF == 0 and stop_event.is_set():
+            return
+
+
+# spawns one worker per core and returns the first valid nonce racing across all workers
+def mine_block_parallel(
+    prev_hash: bytes, txs_hash: bytes, difficulty: int, timestamp: int
+) -> tuple[int, bytes]:
+    num_workers = os.cpu_count() or 1
+    prefix = _PREFIX_STRUCT.pack(prev_hash, txs_hash, timestamp, difficulty)
+    result_queue, stop_event = Queue(), Event()
+    workers = [
+        Process(
+            target=_chain_worker,
+            args=(prefix, difficulty, i, num_workers, result_queue, stop_event),
+        )
+        for i in range(num_workers)
+    ]
+    for w in workers:
+        w.start()
+    nonce, digest = result_queue.get()
+    for w in workers:
+        w.terminate()
+    for w in workers:
+        w.join()
+    return nonce, digest
 
 
 GENESIS_HASH = compute_block_hash(pack_header(GENESIS))
