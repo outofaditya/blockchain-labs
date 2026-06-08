@@ -247,15 +247,15 @@ class Mempool:
     def __len__(self) -> int:
         return len(self.pending)
 
-    # gates on signature then dedups so the mempool only holds authenticated txs
-    def add(self, tx: Tx) -> bool:
+    # gates on signature then dedups returning the tx_hash so callers can reuse it
+    def add(self, tx: Tx) -> bytes | None:
         if not verify_tx(tx):
-            return False
+            return None
         h = compute_tx_hash(tx.sender_key, tx.data, tx.timestamp, tx.signature)
         if h in self.pending:
-            return False
+            return None
         self.pending[h] = tx
-        return True
+        return h
 
     # drops included txs once a block has successfully landed
     def remove(self, tx_hashes: list[bytes]) -> None:

@@ -13,7 +13,7 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from chain import Tx, Chain, Mempool, pack_header, compute_tx_hash, compute_block_hash
+from chain import Tx, Chain, Mempool, pack_header, compute_block_hash
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -208,10 +208,8 @@ class ChainCommunity(Community):
         if payload is None or server is None:
             return
         tx = Tx(payload.sender_key, payload.data, payload.timestamp, payload.signature)
-        if self.mempool.add(tx):
-            tx_hash = compute_tx_hash(
-                tx.sender_key, tx.data, tx.timestamp, tx.signature
-            )
+        tx_hash = self.mempool.add(tx)
+        if tx_hash is not None:
             self.ez_send(server, SubmitTransactionResponse(True, tx_hash, "accepted"))
         else:
             self.ez_send(server, SubmitTransactionResponse(False, b"", "rejected"))
