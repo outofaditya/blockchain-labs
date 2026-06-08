@@ -206,6 +206,21 @@ class ChainCommunity(Community):
             (BlockResponse, self.on_block_response),
         ):
             self.add_message_handler(cls, handler)
+        self.register_task("status", self._status_tick, interval=5.0, delay=5.0)
+
+    # periodic snapshot so the human can see discovery progress while idle
+    async def _status_tick(self) -> None:
+        peers = list(self.get_peers())
+        teammates = sum(
+            1 for p in peers if p.public_key.key_to_bin() in self._teammate_keys
+        )
+        has_server = any(p.public_key.key_to_bin() == SERVER_PUBLIC_KEY for p in peers)
+        mining = "active" if self._mining_gate.is_set() else "idle"
+        self._log(
+            "STATUS",
+            f"peers={len(peers)} server={'yes' if has_server else 'no'} "
+            f"teammates={teammates}/2 height={self.chain.height} mining={mining}",
+        )
 
     # one line structured log with a wall clock prefix for cross terminal correlation
     def _log(self, event: str, detail: str = "") -> None:
