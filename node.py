@@ -13,7 +13,7 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from chain import Tx, Chain, Mempool, pack_header, compute_block_hash
+from chain import Tx, Block, Chain, Mempool, pack_header, compute_block_hash
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -175,6 +175,8 @@ class ChainCommunity(Community):
         super().__init__(settings)
         self.chain = Chain()
         self.mempool = Mempool()
+        my_key = self.my_peer.public_key.key_to_bin()
+        self._teammate_keys = set(MEMBER_KEYS) - {my_key}
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
@@ -189,6 +191,25 @@ class ChainCommunity(Community):
             if p.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
                 return p
         return None
+
+    # yields the currently discovered teammate peers excluding ourselves
+    def _teammate_peers(self):
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() in self._teammate_keys:
+                yield p
+
+    # serializes a freshly mined block and pushes it to every discovered teammate
+    def broadcast_block(self, block: Block) -> None:
+        payload = NewBlock(
+            block.prev_hash,
+            block.txs_hash,
+            block.timestamp,
+            block.difficulty,
+            block.nonce,
+            b"".join(block.tx_hashes),
+        )
+        for peer in self._teammate_peers():
+            self.ez_send(peer, payload)
 
     # shared decode and sender check for every server originated payload
     def _unpack_from_server(self, payload_cls, data, source_address):
