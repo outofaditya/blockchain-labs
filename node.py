@@ -187,6 +187,7 @@ class ChainCommunity(Community):
         my_key = self.my_peer.public_key.key_to_bin()
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
         self._pending: dict[bytes, Block] = {}
+        self._seen: set[bytes] = set()
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
@@ -303,6 +304,10 @@ class ChainCommunity(Community):
         if payload is None:
             return
         block = self._block_from_wire(payload)
+        block_hash = compute_block_hash(pack_header(block))
+        if block_hash in self._seen:
+            return
+        self._seen.add(block_hash)
         status, parent_hash = self.chain.try_extend(block)
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
@@ -317,6 +322,10 @@ class ChainCommunity(Community):
         if payload is None:
             return
         block = self._block_from_wire(payload)
+        block_hash = compute_block_hash(pack_header(block))
+        if block_hash in self._seen:
+            return
+        self._seen.add(block_hash)
         status, parent_hash = self.chain.try_extend(block)
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
