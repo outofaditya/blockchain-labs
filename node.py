@@ -29,6 +29,9 @@ logging.basicConfig(level=logging.CRITICAL)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
+UNI_EMAIL = os.getenv("UNI_EMAIL")
+KEY_PATH = os.getenv("KEY_PATH")
+
 # registration community is fixed by the assignment so the lab 3 server can hear us
 REGISTRATION_COMMUNITY_ID = bytes.fromhex("4c616233426c6f636b636861696e323032365057")
 SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6"
@@ -437,7 +440,7 @@ class ChainCommunity(Community):
 
 
 # boots ipv8 with both overlays bound to the same key and blocks forever
-async def main(pem_path: str, port: int) -> None:
+async def main(port: int) -> None:
     walker = [WalkerDefinition(Strategy.RandomWalk, 20, {"timeout": 3.0})]
     builder = (
         ConfigBuilder(clean=True)
@@ -446,11 +449,11 @@ async def main(pem_path: str, port: int) -> None:
         .set_log_level("CRITICAL")
         .set_walker_interval(0.5)
         .set_working_directory(_DIR)
-        .add_key("my key", "curve25519", pem_path)
+        .add_key(UNI_EMAIL, "curve25519", KEY_PATH)
         .add_overlay(
-            "RegistrationCommunity", "my key", walker, default_bootstrap_defs, {}, []
+            "RegistrationCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, []
         )
-        .add_overlay("ChainCommunity", "my key", walker, default_bootstrap_defs, {}, [])
+        .add_overlay("ChainCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, [])
     )
 
     ipv8 = IPv8(
@@ -482,7 +485,7 @@ async def main(pem_path: str, port: int) -> None:
 
     print(
         f"{'=' * 80}\nLAB 3 BLOCKCHAIN NODE\n{'=' * 80}\n"
-        f"{'Key File':<12}: {pem_path}\n"
+        f"{'Key File':<12}: {KEY_PATH}\n"
         f"{'Port':<12}: {port}\n"
         f"{'Group ID':<12}: {GROUP_ID}\n"
         f"{'Chain ID':<12}: {CHAIN_COMMUNITY_ID.decode()}\n"
@@ -499,11 +502,10 @@ async def main(pem_path: str, port: int) -> None:
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) != 3:
-        print("Usage: python node.py <pem_path> <port>")
-        print("Example: python node.py key.pem 8094")
+    if len(sys.argv) != 2:
+        print("Usage: python node.py <port>")
+        print("Example: python node.py 8094")
         sys.exit(1)
 
-    pem_path = sys.argv[1]
-    port = int(sys.argv[2])
-    asyncio.run(main(pem_path, port))
+    port = int(sys.argv[1])
+    asyncio.run(main(port))
