@@ -18,12 +18,12 @@ from chain import (
     Tx,
     Block,
     Chain,
+    GENESIS,
     Mempool,
     pack_header,
     mining_loop,
-    GENESIS,
-    GENESIS_HASH,
     AppendStatus,
+    GENESIS_HASH,
     compute_block_hash,
 )
 
@@ -502,7 +502,9 @@ async def main(port: int) -> None:
         .add_overlay(
             "RegistrationCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, []
         )
-        .add_overlay("ChainCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, [])
+        .add_overlay(
+            "ChainCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, []
+        )
     )
 
     ipv8 = IPv8(
