@@ -78,6 +78,18 @@ The group's three Ed25519 keys are baked into `signer.py` in registration order 
 
 A three-node proof-of-work blockchain. Each node mines blocks against an 84-byte header, gossips winning blocks to teammates, and answers the Lab 3 server's transaction-submission and chain-walking queries. Nodes converge on a single canonical chain via the longest-chain rule. The server walks all three chains and verifies PoW, header linking, body commitment, and three-way consistency.
 
+Mining is **demand-gated**: the loop idles behind an `asyncio.Event` until a server transaction lands, then mines exactly enough blocks to satisfy the three-confirmation rule before idling again. Fork resolution is handled by a side pool of every received block plus a longest-chain scan that atomically swaps tips via `adopt_fork` whenever a sibling chain overtakes the local one.
+
+**Run** (one terminal per member, ports distinct for local testing):
+
+```bash
+export UNI_EMAIL=<your_email>
+export KEY_PATH=keys/<name>.pem
+.venv/bin/python node.py <port>
+```
+
+The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
+
 ## Identity And Keys
 
 Your IPv8 private key (`key.pem`) is your identity for the entire course. Lab 1 binds your public key to your TU Delft email; Labs 2 and 3 reuse the same key. Lose the key and you lose access to the course server — only Lab 1 supports re-registration of a fresh key against an existing email.
