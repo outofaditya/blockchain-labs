@@ -151,12 +151,13 @@ def mine_block_parallel(
 GENESIS_HASH = compute_block_hash(pack_header(GENESIS))
 
 
-# enumerates the four outcomes the gossip handler must branch on
+# enumerates the five outcomes the gossip handler must branch on
 class AppendStatus(Enum):
     INVALID = auto()
     EXTENDS_TIP = auto()
     KNOWN_BLOCK = auto()
     NEEDS_PARENT = auto()
+    FORK_BRANCH = auto()
 
 
 # in memory ledger with two derived indexes for fast lookups by hash and height
@@ -212,19 +213,22 @@ class Chain:
         self.by_height[len(self.blocks) - 1] = block
         self.tip_hash = block_hash
 
-    # categorizes incoming gossip blocks into four distinct outcomes
+    # categorizes incoming gossip blocks into five distinct outcomes
     def try_extend(self, block: Block) -> tuple[AppendStatus, bytes | None]:
         block_hash = compute_block_hash(pack_header(block))
         if block_hash in self.by_hash:
             return AppendStatus.KNOWN_BLOCK, None
-        if block.prev_hash != self.tip_hash:
-            if block.prev_hash in self.by_hash:
+        if block.prev_hash == self.tip_hash:
+            if not validate_block(block, self.tip):
                 return AppendStatus.INVALID, None
-            return AppendStatus.NEEDS_PARENT, block.prev_hash
-        if not validate_block(block, self.tip):
-            return AppendStatus.INVALID, None
-        self._apply(block, block_hash)
-        return AppendStatus.EXTENDS_TIP, None
+            self._apply(block, block_hash)
+            return AppendStatus.EXTENDS_TIP, None
+        parent = self.by_hash.get(block.prev_hash)
+        if parent is not None:
+            if not validate_block(block, parent):
+                return AppendStatus.INVALID, None
+            return AppendStatus.FORK_BRANCH, None
+        return AppendStatus.NEEDS_PARENT, block.prev_hash
 
 
 # verifies the ed25519 signature over sender_key data and timestamp at the mempool boundary
@@ -359,6 +363,17 @@ if __name__ == "__main__":
     assert chain.height == 5
     assert chain.tip is fork[-1]
     assert chain.by_height[3] is fork[3]
+
+    # try_extend reports FORK_BRANCH for a valid child of a non-tip ancestor
+    sibling_chain = Chain()
+    for blk in main_blocks[1:]:
+        assert sibling_chain.append(blk)
+    sibling_parent = main_blocks[2]
+    sibling_parent_hash = compute_block_hash(pack_header(sibling_parent))
+    s_nonce, _ = mine_block(sibling_parent_hash, empty_txs, 8, NOW + 999)
+    sibling = Block(sibling_parent_hash, empty_txs, NOW + 999, 8, s_nonce, ())
+    status, _ = sibling_chain.try_extend(sibling)
+    assert status is AppendStatus.FORK_BRANCH
 
     # real tx flows through mempool mining and clears once a block lands
     async def _integration() -> None:

@@ -21,6 +21,8 @@ from chain import (
     Mempool,
     pack_header,
     mining_loop,
+    GENESIS,
+    GENESIS_HASH,
     AppendStatus,
     compute_block_hash,
 )
@@ -202,15 +204,15 @@ class RegistrationCommunity(Community):
 class ChainCommunity(Community):
     community_id = CHAIN_COMMUNITY_ID
 
-    # owns the chain and mempool wires all handlers and prepares the walk back buffer
+    # owns the chain and mempool wires all handlers and prepares the reorg buffer
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.chain = Chain()
         self.mempool = Mempool()
         my_key = self.my_peer.public_key.key_to_bin()
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
-        self._pending: dict[bytes, Block] = {}
-        self._seen: set[bytes] = set()
+        self._pool: dict[bytes, Block] = {GENESIS_HASH: GENESIS}
+        self._inflight: set[bytes] = set()
         self._mining_gate = asyncio.Event()
         self._mining_target = 0
         for cls, handler in (
@@ -386,19 +388,29 @@ class ChainCommunity(Community):
         self, sender_key: bytes, block: Block, height: int, rebroadcast: bool
     ) -> None:
         block_hash = compute_block_hash(pack_header(block))
-        if block_hash in self._seen:
+        if block_hash in self.chain.by_hash or block_hash in self._pool:
             return
-        self._seen.add(block_hash)
+        self._pool[block_hash] = block
+        self._inflight.discard(block_hash)
         status, parent_hash = self.chain.try_extend(block)
+        if status is AppendStatus.INVALID:
+            self._log("INVALID", f"height={height}")
+            self._pool.pop(block_hash, None)
+            return
+        if status is AppendStatus.NEEDS_PARENT:
+            self._kick_walk_back(sender_key, block, parent_hash, height)
+            return
+        previous_tip = self.chain.tip_hash
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
             self._log("EXTEND", f"height={self.chain.height}")
-            if rebroadcast:
-                self.broadcast_block(block, height)
-            self._drain_pending(block)
+        else:
+            self._log("FORK", f"height={height}")
+        self._try_drain_and_reorg()
+        if self.chain.tip_hash == block_hash and rebroadcast:
+            self.broadcast_block(block, self.chain.height)
+        if self.chain.tip_hash != previous_tip:
             self._maybe_pause_mining()
-        elif status is AppendStatus.NEEDS_PARENT:
-            self._kick_walk_back(sender_key, block, parent_hash, height)
 
     # reconstructs a Block from any wire payload sharing the canonical header fields
     def _block_from_wire(self, payload) -> Block:
@@ -414,29 +426,66 @@ class ChainCommunity(Community):
             tx_hashes,
         )
 
-    # buffers the orphan and requests its claimed parent so we can fill the gap
+    # asks the gossiping peer for the orphan's parent unless that request is already inflight
     def _kick_walk_back(
         self, sender_key: bytes, orphan: Block, parent_hash: bytes, orphan_height: int
     ) -> None:
-        if parent_hash in self._pending:
+        if parent_hash in self._inflight or parent_hash in self._pool:
             return
-        self._pending[parent_hash] = orphan
+        self._inflight.add(parent_hash)
         target = self._peer_with_key(sender_key)
         if target is not None:
             self._log("PARENT_REQ", f"height={orphan_height - 1}")
             self.ez_send(target, GetBlock(orphan_height - 1))
 
-    # after a block lands replays any orphans that were waiting on its hash
-    def _drain_pending(self, applied: Block) -> None:
-        applied_hash = compute_block_hash(pack_header(applied))
-        orphan = self._pending.pop(applied_hash, None)
-        while orphan is not None:
-            status, _ = self.chain.try_extend(orphan)
-            if status is not AppendStatus.EXTENDS_TIP:
-                return
-            self.mempool.remove(list(orphan.tx_hashes))
-            applied_hash = compute_block_hash(pack_header(orphan))
-            orphan = self._pending.pop(applied_hash, None)
+    # greedily extends tip from pool blocks then adopts any strictly longer sibling chain
+    def _try_drain_and_reorg(self) -> None:
+        extended = True
+        while extended:
+            extended = False
+            for cand_hash, cand in self._pool.items():
+                if cand_hash in self.chain.by_hash:
+                    continue
+                if cand.prev_hash != self.chain.tip_hash:
+                    continue
+                status, _ = self.chain.try_extend(cand)
+                if status is AppendStatus.EXTENDS_TIP:
+                    self.mempool.remove(list(cand.tx_hashes))
+                    self._log("EXTEND", f"height={self.chain.height} drained")
+                    extended = True
+                    break
+        best_chain = None
+        for cand_hash, cand in self._pool.items():
+            if cand_hash in self.chain.by_hash:
+                continue
+            candidate = self._walk_to_genesis(cand_hash)
+            if candidate is None:
+                continue
+            if best_chain is None or len(candidate) > len(best_chain):
+                best_chain = candidate
+        if best_chain is not None and len(best_chain) > len(self.chain.blocks):
+            if self.chain.adopt_fork(best_chain):
+                self._log("REORG", f"new_tip_height={self.chain.height}")
+                for adopted in best_chain[1:]:
+                    self.mempool.remove(list(adopted.tx_hashes))
+
+    # walks prev_hash links back through pool union chain returning a full chain or None
+    def _walk_to_genesis(self, block_hash: bytes) -> list[Block] | None:
+        ancestors: list[Block] = []
+        cursor = block_hash
+        seen: set[bytes] = set()
+        while cursor != GENESIS_HASH:
+            if cursor in seen:
+                return None
+            seen.add(cursor)
+            block = self._pool.get(cursor) or self.chain.by_hash.get(cursor)
+            if block is None:
+                return None
+            ancestors.append(block)
+            cursor = block.prev_hash
+        ancestors.append(GENESIS)
+        ancestors.reverse()
+        return ancestors
 
 
 # boots ipv8 with both overlays bound to the same key and blocks forever
