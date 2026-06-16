@@ -1,2 +1,4 @@
 # ruff
 pyipv8
+pytest
+pytest-asyncio
