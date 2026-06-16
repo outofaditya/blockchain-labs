@@ -15,7 +15,7 @@ from labs.three.chain import (
 from common.banner import rule, rows, divider
 
 # difficulty tuned so each mined block takes a noticeable fraction of a second
-DIFFICULTY = 18
+DIFFICULTY = 24
 
 
 # wall clock timestamp used for both txs and block headers
