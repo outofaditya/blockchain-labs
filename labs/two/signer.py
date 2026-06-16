@@ -32,7 +32,6 @@ MEMBER_KEYS_HEX = [
     "4c69624e61434c504b3af9e8ecfcb5968c5438c65adf621afcb336895329da741ef0e1ff846db37f3a1dd4188afcad7d8f8a890571930a4bb7b982904911437c2aba97922746c5fdb176",  # aditya
 ]
 MEMBER_KEYS = [bytes.fromhex(h) for h in MEMBER_KEYS_HEX]
-SUBMITTER_BY_ROUND = {1: 1, 2: 2, 3: 3}
 
 
 # initial registration sending the three member public keys to the server
@@ -156,10 +155,6 @@ class SignerCommunity(Community):
                 return p
         return None
 
-    # wraps the ipv8 native ed25519 signing on the local private key
-    def _sign(self, data: bytes) -> bytes:
-        return self.crypto.create_signature(self.my_peer.key, data)
-
     # clears per round state between iterations so events do not leak
     def _reset_round(self, round_num: int) -> None:
         self.current_round = round_num
@@ -242,7 +237,7 @@ class SignerCommunity(Community):
         start = asyncio.get_event_loop().time()
         for round_num in (1, 2, 3):
             self._reset_round(round_num)
-            am_submitter = self.my_member_index == SUBMITTER_BY_ROUND[round_num]
+            am_submitter = self.my_member_index == round_num
             role = "submitter" if am_submitter else "signer"
             print(f"Round {round_num} [{role}]")
 
@@ -279,7 +274,9 @@ class SignerCommunity(Community):
             if peer:
                 self.ez_send(peer, NonceShare(round_num, self.current_nonce))
 
-        self.signatures[self.my_member_index] = self._sign(self.current_nonce)
+        self.signatures[self.my_member_index] = self.crypto.create_signature(
+            self.my_peer.key, self.current_nonce
+        )
         if len(self.signatures) == 3:
             self.sigs_event.set()
 
@@ -312,8 +309,8 @@ class SignerCommunity(Community):
         await self.nonce_event.wait()
 
         # fire 3 times for udp loss resilience
-        sig = self._sign(self.current_nonce)
-        submitter = self._member_peer(SUBMITTER_BY_ROUND[round_num])
+        sig = self.crypto.create_signature(self.my_peer.key, self.current_nonce)
+        submitter = self._member_peer(round_num)
         if submitter:
             for _ in range(3):
                 self.ez_send(
