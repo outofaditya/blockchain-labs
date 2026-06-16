@@ -14,6 +14,8 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
+from banner import rule, section, rows
+
 from chain import (
     Tx,
     Block,
@@ -47,9 +49,6 @@ GROUP_ID = "814ee89d4621f005"
 
 # tuned so each block takes a few seconds making the demo readable in real time
 MINING_DIFFICULTY = 18
-
-# blocks to mine after a server transaction one for the tx plus three confirmations
-CONFIRMATION_DEPTH = 4
 
 # members in registration order
 MEMBER_KEYS_HEX = [
@@ -158,9 +157,16 @@ class RegistrationCommunity(Community):
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.registered = False
-        self.rekicked = False
+        self.chain = None
+        self._quorum_logged = False
+        # only the first member in the canonical group order owns registration so
+        # the server sees a single sender instead of three idempotent duplicates
+        self.is_registrar = self.my_peer.public_key.key_to_bin() == MEMBER_KEYS[0]
         self.add_message_handler(RegisterResponse, self.on_register_response)
-        self.register_task("register", self._register, interval=2.0, delay=3.0)
+        if self.is_registrar:
+            self.register_task("register", self._register, interval=2.0, delay=3.0)
+        role = "registrar" if self.is_registrar else "observer"
+        print(f"Joined RegistrationCommunity id={REGISTRATION_COMMUNITY_ID.hex()} role={role}")
 
     # filters discovered peers down to the one matching the published server key
     def _server_peer(self):
@@ -169,19 +175,24 @@ class RegistrationCommunity(Community):
                 return p
         return None
 
-    # one shot send guarded by registered flag and server peer discovery
+    # one shot send guarded by registered flag server peer discovery and chain overlay quorum
     async def _register(self) -> None:
         if self.registered or (server := self._server_peer()) is None:
             return
+        if not self._chain_quorum():
+            return
         self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
 
-    # second registration fires after discovery settles so the server retry budget resets
-    async def _rekick(self) -> None:
-        server = self._server_peer()
-        if server is None:
-            return
-        print("Registration: re-registering to reset the server retry budget")
-        self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
+    # returns true only when the chain overlay has both teammates already as peers
+    def _chain_quorum(self) -> bool:
+        if self.chain is None:
+            return False
+        present = {p.public_key.key_to_bin() for p in self.chain.get_peers()}
+        ready = self.chain._teammate_keys.issubset(present)
+        if ready and not self._quorum_logged:
+            self._quorum_logged = True
+            print("Quorum: all 3 nodes present in chain community — sending RegisterBlockchain")
+        return ready
 
     # verifies the reply came from the published server key then prints the verdict
     def on_register_response(self, source_address: tuple, data: bytes) -> None:
@@ -195,9 +206,6 @@ class RegistrationCommunity(Community):
         status = "OK" if payload.success else "FAIL"
         print(f"Registration [{status}]: {payload.message}")
         self.registered = True
-        if not self.rekicked:
-            self.rekicked = True
-            self.register_task("rekick", self._rekick, delay=60.0)
 
 
 # main overlay holding the chain mempool and the four handlers for server and gossip messages
@@ -213,8 +221,6 @@ class ChainCommunity(Community):
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
         self._pool: dict[bytes, Block] = {GENESIS_HASH: GENESIS}
         self._inflight: set[bytes] = set()
-        self._mining_gate = asyncio.Event()
-        self._mining_target = 0
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
@@ -224,6 +230,7 @@ class ChainCommunity(Community):
         ):
             self.add_message_handler(cls, handler)
         self.register_task("status", self._status_tick, interval=5.0, delay=5.0)
+        print(f"Joined ChainCommunity id={CHAIN_COMMUNITY_ID!r}")
 
     # periodic snapshot so the human can see discovery progress while idle
     async def _status_tick(self) -> None:
@@ -232,30 +239,15 @@ class ChainCommunity(Community):
             1 for p in peers if p.public_key.key_to_bin() in self._teammate_keys
         )
         has_server = any(p.public_key.key_to_bin() == SERVER_PUBLIC_KEY for p in peers)
-        mining = "active" if self._mining_gate.is_set() else "idle"
         self._log(
             "STATUS",
             f"peers={len(peers)} server={'yes' if has_server else 'no'} "
-            f"teammates={teammates}/2 height={self.chain.height} mining={mining}",
+            f"teammates={teammates}/2 height={self.chain.height} mempool={len(self.mempool)}",
         )
 
     # one line structured log with a wall clock prefix for cross terminal correlation
     def _log(self, event: str, detail: str = "") -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {event:<11} {detail}")
-
-    # opens the gate so mining_loop runs until the chain reaches the new target
-    def _enable_mining(self, target: int) -> None:
-        if target <= self._mining_target:
-            return
-        self._mining_target = target
-        self._mining_gate.set()
-        self._log("MINING", f"enabled target_height={target}")
-
-    # closes the gate once the chain has caught up with the target
-    def _maybe_pause_mining(self) -> None:
-        if self._mining_gate.is_set() and self.chain.height >= self._mining_target:
-            self._mining_gate.clear()
-            self._log("MINING", f"paused tip_height={self.chain.height}")
 
     # yields the currently discovered teammate peers excluding ourselves
     def _teammate_peers(self):
@@ -312,7 +304,6 @@ class ChainCommunity(Community):
         tx_hash = self.mempool.add(tx)
         if tx_hash is not None:
             self.ez_send(server, SubmitTransactionResponse(True, tx_hash, "accepted"))
-            self._enable_mining(self.chain.height + CONFIRMATION_DEPTH)
         else:
             self.ez_send(server, SubmitTransactionResponse(False, b"", "rejected"))
 
@@ -400,7 +391,6 @@ class ChainCommunity(Community):
         if status is AppendStatus.NEEDS_PARENT:
             self._kick_walk_back(sender_key, block, parent_hash, height)
             return
-        previous_tip = self.chain.tip_hash
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
             self._log("EXTEND", f"height={self.chain.height}")
@@ -409,8 +399,6 @@ class ChainCommunity(Community):
         self._try_drain_and_reorg()
         if self.chain.tip_hash == block_hash and rebroadcast:
             self.broadcast_block(block, self.chain.height)
-        if self.chain.tip_hash != previous_tip:
-            self._maybe_pause_mining()
 
     # reconstructs a Block from any wire payload sharing the canonical header fields
     def _block_from_wire(self, payload) -> Block:
@@ -517,12 +505,13 @@ async def main(port: int) -> None:
     await ipv8.start()
 
     chain_overlay = ipv8.get_overlay(ChainCommunity)
+    reg_overlay = ipv8.get_overlay(RegistrationCommunity)
+    reg_overlay.chain = chain_overlay
 
     async def broadcast(block: Block) -> None:
         height = chain_overlay.chain.height
         chain_overlay._log("MINED", f"height={height} nonce={block.nonce}")
         chain_overlay.broadcast_block(block, height)
-        chain_overlay._maybe_pause_mining()
 
     asyncio.create_task(
         mining_loop(
@@ -530,20 +519,19 @@ async def main(port: int) -> None:
             chain_overlay.mempool,
             MINING_DIFFICULTY,
             broadcast,
-            gate=chain_overlay._mining_gate,
         )
     )
 
-    print(
-        f"{'=' * 80}\nLAB 3 BLOCKCHAIN NODE\n{'=' * 80}\n"
-        f"{'Key File':<12}: {KEY_PATH}\n"
-        f"{'Port':<12}: {port}\n"
-        f"{'Group ID':<12}: {GROUP_ID}\n"
-        f"{'Chain ID':<12}: {CHAIN_COMMUNITY_ID.decode()}\n"
-        f"{'Difficulty':<12}: {MINING_DIFFICULTY} leading zero bits\n"
-        f"{'Public Key':<12}: {chain_overlay.my_peer.public_key.key_to_bin().hex()}\n"
-        f"{'-' * 80}\nIDLE UNTIL SERVER SUBMITS A TRANSACTION\n{'-' * 80}"
-    )
+    rule("LAB 3 BLOCKCHAIN NODE")
+    rows([
+        ("Key File", KEY_PATH),
+        ("Port", port),
+        ("Group ID", GROUP_ID),
+        ("Chain ID", CHAIN_COMMUNITY_ID.decode()),
+        ("Difficulty", f"{MINING_DIFFICULTY} leading zero bits"),
+        ("Public Key", chain_overlay.my_peer.public_key.key_to_bin().hex()),
+    ], label_width=12)
+    section("MINING CONTINUOUSLY — WAITING FOR PEER DISCOVERY AND SERVER TRAFFIC")
 
     # never set so the node runs until ctrl c
     await asyncio.Event().wait()

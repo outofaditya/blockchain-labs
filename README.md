@@ -29,9 +29,8 @@ All three labs share the same foundation: an IPv8 peer that joins a community by
 ├── chain.py        # lab 3: block primitives chain mempool and mining
 ├── node.py         # lab 3: ipv8 node hosting the chain community
 ├── tasks/          # original assignment briefs
-├── keys/           # group members' public keys (private keys gitignored)
-├── pyproject.toml  # ruff configuration
-└── key.pem         # local node identity (gitignored)
+├── keys/           # per-member IPv8 key files (gitignored, one .pem per member)
+└── pyproject.toml  # ruff configuration
 ```
 
 ## Setup
@@ -41,7 +40,7 @@ python3 -m venv .venv
 .venv/bin/pip install pyipv8 ruff
 ```
 
-Python 3.10 or newer is required. The IPv8 network identity is loaded from `key.pem` at the repository root; Lab 1 generates one on first run if it does not exist.
+Python 3.10 or newer is required. Each lab loads its IPv8 identity from a `.pem` file under `keys/`; `KEY_PATH` (env var, defaults to `keys/aditya.pem` for Lab 1) selects which one. Lab 1 generates a fresh key on first run if the target file does not exist.
 
 ## Lab 1 — Proof Of Work Over IPv8
 
@@ -92,7 +91,7 @@ The chain's 20-byte community ID, the group ID, and the three member public keys
 
 ## Identity And Keys
 
-Your IPv8 private key (`key.pem`) is your identity for the entire course. Lab 1 binds your public key to your TU Delft email; Labs 2 and 3 reuse the same key. Lose the key and you lose access to the course server — only Lab 1 supports re-registration of a fresh key against an existing email.
+Your IPv8 private key (`keys/<name>.pem`) is your identity for the entire course. Lab 1 binds your public key to your TU Delft email; Labs 2 and 3 reuse the same key. Lose the key and you lose access to the course server — only Lab 1 supports re-registration of a fresh key against an existing email.
 
 ## Dependencies
 

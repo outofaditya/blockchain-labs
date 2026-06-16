@@ -14,6 +14,8 @@ from miner import EMAIL, GITHUB_URL
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
+from banner import rule, section, rows
+
 logging.basicConfig(level=logging.CRITICAL)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,17 +86,15 @@ class Lab1Community(Community):
         if auth.public_key_bin != SERVER_PUBLIC_KEY:
             return
 
-        print(
-            f"{'-' * 80}\nSERVER RESPONSE\n{'-' * 80}\n"
-            f"{'Success':<15}: {payload.success}\n"
-            f"{'Message':<15}: {payload.message}\n{'=' * 80}"
-        )
+        section("SERVER RESPONSE")
+        rows([("Success", payload.success), ("Message", payload.message)])
+        rule()
         self.done.set()
 
 
 # wires up ipv8 community and waits for the server response before stopping
 async def main(nonce: int) -> None:
-    key_file = os.path.join(_DIR, "key.pem")
+    key_file = os.environ.get("KEY_PATH", os.path.join(_DIR, "keys", "aditya.pem"))
 
     builder = (
         ConfigBuilder(clean=True)
@@ -120,13 +120,13 @@ async def main(nonce: int) -> None:
     community = ipv8.get_overlay(Lab1Community)
     community.nonce = nonce
 
-    print(
-        f"{'=' * 80}\nIPv8 SUBMISSION CLIENT\n{'=' * 80}\n"
-        f"{'Key File':<15}: {key_file}\n"
-        f"{'Public Key':<15}: {community.my_peer.public_key.key_to_bin().hex()}\n"
-        f"{'Nonce':<15}: {nonce}\n"
-        f"{'-' * 80}\nDISCOVERY AND SUBMISSION\n{'-' * 80}"
-    )
+    rule("IPv8 SUBMISSION CLIENT")
+    rows([
+        ("Key File", key_file),
+        ("Public Key", community.my_peer.public_key.key_to_bin().hex()),
+        ("Nonce", nonce),
+    ])
+    section("DISCOVERY AND SUBMISSION")
 
     await community.done.wait()
     await ipv8.stop()

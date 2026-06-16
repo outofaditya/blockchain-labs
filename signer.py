@@ -14,6 +14,8 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
+from banner import rule, section, rows, divider
+
 logging.basicConfig(level=logging.CRITICAL)
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -238,11 +240,9 @@ class SignerCommunity(Community):
 
     # main driver looping the three rounds and dispatching by role
     async def run_rounds(self) -> None:
-        print(
-            f"{'=' * 80}\nLAB 2 SIGNATURE CLIENT\n{'=' * 80}\n"
-            f"{'Member Index':<14}: {self.my_member_index}\n"
-            f"{'Group ID':<14}: {GROUP_ID}\n{'-' * 80}"
-        )
+        rule("LAB 2 SIGNATURE CLIENT")
+        rows([("Member Index", self.my_member_index), ("Group ID", GROUP_ID)], label_width=14)
+        divider()
 
         await self._wait_for_peers()
         print("Peers Discovered. Starting 3 Rounds.\n")
@@ -264,7 +264,9 @@ class SignerCommunity(Community):
                 break
 
         elapsed = asyncio.get_event_loop().time() - start
-        print(f"{'-' * 80}\n{'Total Time':<14}: {elapsed:.2f}s\n{'=' * 80}")
+        divider()
+        rows([("Total Time", f"{elapsed:.2f}s")], label_width=14)
+        rule()
         self.done.set()
 
     # active path requesting challenge sharing nonce collecting sigs and submitting bundle

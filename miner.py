@@ -4,6 +4,8 @@ from struct import Struct
 from hashlib import sha256
 from multiprocessing import Event, Queue, Process
 
+from banner import rule, section, rows
+
 DIFFICULTY = 28
 EMAIL = "acpatil@tudelft.nl"
 GITHUB_URL = "https://github.com/outofaditya/blockchain-labs"
@@ -42,14 +44,14 @@ def worker(worker_id: int, num_workers: int, result_queue, stop_event):
 # spawns one worker per core and returns as soon as any worker finds a valid nonce
 def mine():
     num_workers = os.cpu_count() or 1
-    print(
-        f"{'=' * 80}\nPROOF-OF-WORK MINER PROGRAM\n{'=' * 80}\n"
-        f"{'Email':<15}: {EMAIL}\n"
-        f"{'GitHub URL':<15}: {GITHUB_URL}\n"
-        f"{'Workers':<15}: {num_workers}\n"
-        f"{'Difficulty':<15}: {DIFFICULTY} Leading Zero Bits\n"
-        f"{'-' * 80}\nMINING STARTED\n{'-' * 80}"
-    )
+    rule("PROOF-OF-WORK MINER PROGRAM")
+    rows([
+        ("Email", EMAIL),
+        ("GitHub URL", GITHUB_URL),
+        ("Workers", num_workers),
+        ("Difficulty", f"{DIFFICULTY} Leading Zero Bits"),
+    ])
+    section("MINING STARTED")
 
     result_queue, stop_event = Queue(), Event()
     workers = [
@@ -63,11 +65,12 @@ def mine():
     nonce, digest = result_queue.get()
     elapsed = time.time() - start
 
-    print(
-        f"{'Nonce':<15}: {nonce}\n"
-        f"{'Digest Value':<15}: {digest.hex()}\n"
-        f"{'Time Elapsed':<15}: {elapsed:.2f} seconds\n{'=' * 80}"
-    )
+    rows([
+        ("Nonce", nonce),
+        ("Digest Value", digest.hex()),
+        ("Time Elapsed", f"{elapsed:.2f} seconds"),
+    ])
+    rule()
 
     for w in workers:
         w.terminate()
