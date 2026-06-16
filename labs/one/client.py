@@ -10,15 +10,14 @@ from ipv8.configuration import (
     WalkerDefinition,
     default_bootstrap_defs,
 )
-from miner import EMAIL, GITHUB_URL
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from banner import rule, section, rows
+from common.banner import rule, section, rows
+from common.paths import REPO_ROOT
+from labs.one.miner import EMAIL, GITHUB_URL
 
 logging.basicConfig(level=logging.CRITICAL)
-
-_DIR = os.path.dirname(os.path.abspath(__file__))
 COMMUNITY_ID = bytes.fromhex("2c1cc6e35ff484f99ebdfb6108477783c0102881")
 SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c4591cc0cb178bc5a811da6d87d27ef319b2638ef60cc8d119724f4c53a1ebfad919c3ac4136c501ce5c09364e0ebb"
 SERVER_PUBLIC_KEY = bytes.fromhex(SERVER_PUBLIC_KEY_HEX)
@@ -94,7 +93,7 @@ class Lab1Community(Community):
 
 # wires up ipv8 community and waits for the server response before stopping
 async def main(nonce: int) -> None:
-    key_file = os.environ.get("KEY_PATH", os.path.join(_DIR, "keys", "aditya.pem"))
+    key_file = os.environ.get("KEY_PATH", os.path.join(REPO_ROOT, "keys", "aditya.pem"))
 
     builder = (
         ConfigBuilder(clean=True)
@@ -102,7 +101,7 @@ async def main(nonce: int) -> None:
         .set_address("0.0.0.0")
         .set_log_level("CRITICAL")
         .set_walker_interval(0.5)
-        .set_working_directory(_DIR)
+        .set_working_directory(REPO_ROOT)
         .add_key("my key", "curve25519", key_file)
         .add_overlay(
             "Lab1Community",
@@ -136,8 +135,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python client.py <nonce>")
-        print("Example: python client.py 123456789")
+        print("Usage: python -m labs.one.client <nonce>")
+        print("Example: python -m labs.one.client 123456789")
         sys.exit(1)
 
     nonce = int(sys.argv[1])

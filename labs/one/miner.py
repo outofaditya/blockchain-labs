@@ -4,7 +4,7 @@ from struct import Struct
 from hashlib import sha256
 from multiprocessing import Event, Queue, Process
 
-from banner import rule, section, rows
+from common.banner import rule, section, rows
 
 DIFFICULTY = 28
 EMAIL = "acpatil@tudelft.nl"

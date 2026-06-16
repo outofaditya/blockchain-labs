@@ -23,11 +23,18 @@ All three labs share the same foundation: an IPv8 peer that joins a community by
 
 ```
 .
-├── miner.py        # lab 1: standalone proof-of-work miner
-├── client.py       # lab 1: ipv8 client that submits the mined nonce
-├── signer.py       # lab 2: coordinated group signing client
-├── chain.py        # lab 3: block primitives chain mempool and mining
-├── node.py         # lab 3: ipv8 node hosting the chain community
+├── common/
+│   ├── banner.py   # shared startup-banner helpers
+│   └── paths.py    # repo-root anchor for IPv8 working dir + key lookup
+├── labs/
+│   ├── one/
+│   │   ├── miner.py   # lab 1: standalone proof-of-work miner
+│   │   └── client.py  # lab 1: ipv8 client that submits the mined nonce
+│   ├── two/
+│   │   └── signer.py  # lab 2: coordinated group signing client
+│   └── three/
+│       ├── chain.py   # lab 3: block primitives, chain, mempool, mining
+│       └── node.py    # lab 3: ipv8 node hosting the chain community
 ├── tasks/          # original assignment briefs
 ├── keys/           # per-member IPv8 key files (gitignored, one .pem per member)
 └── pyproject.toml  # ruff configuration
@@ -53,8 +60,8 @@ The client then joins the Lab 1 IPv8 community, walks the gossip network until i
 **Run**:
 
 ```bash
-.venv/bin/python miner.py             # mine; copy the printed nonce
-.venv/bin/python client.py <nonce>    # submit to the server
+.venv/bin/python -m labs.one.miner             # mine; copy the printed nonce
+.venv/bin/python -m labs.one.client <nonce>    # submit to the server
 ```
 
 ## Lab 2 — Coordinated Group Signing
@@ -68,10 +75,10 @@ The implementation uses `asyncio.Event` primitives to bridge IPv8's synchronous 
 **Run** (one terminal per member, ports distinct for local testing):
 
 ```bash
-.venv/bin/python signer.py <pem_path> <port>
+.venv/bin/python -m labs.two.signer <pem_path> <port>
 ```
 
-The group's three Ed25519 keys are baked into `signer.py` in registration order (Pedro → Danil → Aditya); each instance loads its own `.pem`, matches its public key against the constant, derives its `member_index`, and plays the right role for each round.
+The group's three Ed25519 keys are baked into `labs/two/signer.py` in registration order (Pedro → Danil → Aditya); each instance loads its own `.pem`, matches its public key against the constant, derives its `member_index`, and plays the right role for each round.
 
 ## Lab 3 — PoW Blockchain Over IPv8
 
@@ -84,10 +91,10 @@ Mining is **demand-gated**: the loop idles behind an `asyncio.Event` until a ser
 ```bash
 export UNI_EMAIL=<your_email>
 export KEY_PATH=keys/<name>.pem
-.venv/bin/python node.py <port>
+.venv/bin/python -m labs.three.node <port>
 ```
 
-The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
+The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `labs/three/node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
 
 ## Identity And Keys
 

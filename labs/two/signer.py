@@ -14,12 +14,10 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from banner import rule, section, rows, divider
+from common.banner import rule, section, rows, divider
+from common.paths import REPO_ROOT
 
 logging.basicConfig(level=logging.CRITICAL)
-
-_DIR = os.path.dirname(os.path.abspath(__file__))
-KEY_FILE = os.path.join(_DIR, "key.pem")
 
 COMMUNITY_ID = bytes.fromhex("4c61623247726f75705369676e696e6732303236")
 SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3a82e33614a342774e084af80835838d6dbdb64a537d3ddb6c1d82011a7f101553cda40cf5fa0e0fc23abd0a9c4f81322282c5b34566f6b8401f5f683031e60c96"
@@ -350,7 +348,7 @@ async def main(pem_path: str, port: int) -> None:
         .set_address("0.0.0.0")
         .set_log_level("CRITICAL")
         .set_walker_interval(0.5)
-        .set_working_directory(_DIR)
+        .set_working_directory(REPO_ROOT)
         .add_key("my key", "curve25519", pem_path)
         .add_overlay(
             "SignerCommunity",
@@ -376,8 +374,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 3:
-        print("Usage: python signer.py <pem_path> <port>")
-        print("Example: python signer.py key.pem 8091")
+        print("Usage: python -m labs.two.signer <pem_path> <port>")
+        print("Example: python -m labs.two.signer keys/aditya.pem 8091")
         sys.exit(1)
 
     pem_path = sys.argv[1]

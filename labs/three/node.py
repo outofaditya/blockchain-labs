@@ -14,9 +14,9 @@ from ipv8.configuration import (
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from banner import rule, section, rows
-
-from chain import (
+from common.banner import rule, section, rows
+from common.paths import REPO_ROOT
+from labs.three.chain import (
     Tx,
     Block,
     Chain,
@@ -30,8 +30,6 @@ from chain import (
 )
 
 logging.basicConfig(level=logging.CRITICAL)
-
-_DIR = os.path.dirname(os.path.abspath(__file__))
 
 UNI_EMAIL = os.getenv("UNI_EMAIL")
 KEY_PATH = os.getenv("KEY_PATH")
@@ -485,7 +483,7 @@ async def main(port: int) -> None:
         .set_address("0.0.0.0")
         .set_log_level("CRITICAL")
         .set_walker_interval(0.5)
-        .set_working_directory(_DIR)
+        .set_working_directory(REPO_ROOT)
         .add_key(UNI_EMAIL, "curve25519", KEY_PATH)
         .add_overlay(
             "RegistrationCommunity", UNI_EMAIL, walker, default_bootstrap_defs, {}, []
@@ -542,8 +540,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python node.py <port>")
-        print("Example: python node.py 8094")
+        print("Usage: python -m labs.three.node <port>")
+        print("Example: python -m labs.three.node 8094")
         sys.exit(1)
 
     port = int(sys.argv[1])
