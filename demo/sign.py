@@ -31,36 +31,36 @@ class MockServer:
         self, nonce: bytes, round_num: int, sigs: list[bytes], submitter_pub: bytes
     ) -> str:
         if submitter_pub in self.submitters_seen:
-            return "rejected: submitter already used in a previous round"
+            return "Rejected: Submitter Already Used In A Previous Round"
         for i, sig in enumerate(sigs):
             pub = default_eccrypto.key_from_public_bin(self.member_pubs[i])
             if not default_eccrypto.is_valid_signature(pub, nonce, sig):
-                return f"rejected: invalid signature from member {i + 1}"
+                return f"Rejected: Invalid Signature From Member {i + 1}"
         self.submitters_seen.add(submitter_pub)
         elapsed = time.time() - self.start_time
-        return f"round {round_num} recorded at {elapsed:.2f}s of {GROUP_BUDGET_SECONDS:.0f}s"
+        return f"Round {round_num} Recorded At {elapsed:.2f}s Of {GROUP_BUDGET_SECONDS:.0f}s"
 
 
 def main() -> None:
-    rule("LAB 2 LOCAL DEMO")
-    print("Three in-process signers complete three rounds of round-robin signing.")
+    rule("Lab 2 Local Demo")
+    print("Three In-Process Signers Complete Three Rounds Of Round-Robin Signing.")
     print(
-        f"Total budget: {GROUP_BUDGET_SECONDS:.0f}s wall-clock across all three rounds."
+        f"Total Budget: {GROUP_BUDGET_SECONDS:.0f}s Wall-Clock Across All Three Rounds."
     )
     print()
 
-    section("KEY GENERATION")
+    section("Key Generation")
     keys = [default_eccrypto.generate_key("curve25519") for _ in range(3)]
     pubs = [k.pub().key_to_bin() for k in keys]
     rows(
         [
-            ("Member 1 key", f"...{pubs[0][-8:].hex()}"),
-            ("Member 2 key", f"...{pubs[1][-8:].hex()}"),
-            ("Member 3 key", f"...{pubs[2][-8:].hex()}"),
+            ("Member 1 Key", f"...{pubs[0][-8:].hex()}"),
+            ("Member 2 Key", f"...{pubs[1][-8:].hex()}"),
+            ("Member 3 Key", f"...{pubs[2][-8:].hex()}"),
         ]
     )
 
-    section("REGISTRATION")
+    section("Registration")
     server = MockServer(pubs)
     rows(
         [
@@ -70,33 +70,33 @@ def main() -> None:
     )
 
     for round_num in (1, 2, 3):
-        section(f"ROUND {round_num}")
-        nonce, issued_round, deadline = server.challenge()
+        section(f"Round {round_num}")
+        nonce, issued_round, _deadline = server.challenge()
         assert issued_round == round_num
-        print(f"[server] issued nonce={nonce[:8].hex()}... round={issued_round}")
+        print(f"[Server] Issued Nonce={nonce[:8].hex()}... Round={issued_round}")
 
         submitter_index = round_num  # round N submitted by member N
         sigs = [default_eccrypto.create_signature(k, nonce) for k in keys]
         print(
-            f"[member {submitter_index}] collected three signatures, submitting bundle"
+            f"[Member {submitter_index}] Collected Three Signatures, Submitting Bundle"
         )
 
         result = server.submit(nonce, round_num, sigs, pubs[submitter_index - 1])
-        print(f"[server] {result}")
+        print(f"[Server] {result}")
 
     elapsed = time.time() - server.start_time
     divider()
     rows(
         [
-            ("Rounds completed", "3/3"),
-            ("Distinct submitters", len(server.submitters_seen)),
+            ("Rounds Completed", "3/3"),
+            ("Submitters", len(server.submitters_seen)),
             ("Elapsed", f"{elapsed:.2f}s"),
             ("Budget", f"{GROUP_BUDGET_SECONDS:.2f}s"),
-            ("Within budget", elapsed < GROUP_BUDGET_SECONDS),
+            ("Within Budget", elapsed < GROUP_BUDGET_SECONDS),
         ]
     )
     assert len(server.submitters_seen) == 3 and elapsed < GROUP_BUDGET_SECONDS
-    rule("LAB 2 DEMO PASSED")
+    rule("Lab 2 Demo Passed")
 
 
 if __name__ == "__main__":

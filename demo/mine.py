@@ -23,48 +23,48 @@ def search(difficulty: int) -> tuple[int, bytes, int]:
 
 
 def main() -> None:
-    rule("LAB 1 LOCAL DEMO")
+    rule("Lab 1 Local Demo")
     print(
-        f"Mining a proof-of-work nonce at difficulty {DEMO_DIFFICULTY} bits "
-        f"(spec is 28 bits, lowered here for demo cadence)."
+        f"Proof-Of-Work Search At Difficulty {DEMO_DIFFICULTY} Bits "
+        f"(Spec Is 28; Lowered For Demo Cadence)."
     )
     print()
-    section("HASH INPUT")
+    section("Hash Input")
     rows(
         [
             ("Email", EMAIL),
             ("GitHub URL", GITHUB_URL),
-            ("Prefix bytes", f"{PREFIX!r}"),
+            ("Prefix Bytes", f"{PREFIX!r}"),
         ]
     )
 
-    section("MINING")
+    section("Mining")
     start = time.time()
     nonce, digest, attempts = search(DEMO_DIFFICULTY)
     elapsed = time.time() - start
     rows(
         [
-            ("Nonce found", nonce),
+            ("Nonce Found", nonce),
             ("Digest", digest.hex()),
             ("Attempts", attempts),
-            ("Time", f"{elapsed:.2f}s"),
+            ("Time Elapsed", f"{elapsed:.2f}s"),
         ]
     )
 
-    section("VERIFICATION")
+    section("Verification")
     h = sha256(PREFIX)
     h.update(_NONCE_STRUCT.pack(nonce))
     recomputed = h.digest()
     rows(
         [
-            ("Recomputed digest", recomputed.hex()),
-            ("Matches mined digest", recomputed == digest),
-            ("Has required zero bits", validate_nonce(recomputed, DEMO_DIFFICULTY)),
+            ("Recomputed Hash", recomputed.hex()),
+            ("Matches Mined", recomputed == digest),
+            ("Zero Bits Pass", validate_nonce(recomputed, DEMO_DIFFICULTY)),
         ]
     )
     divider()
     assert recomputed == digest and validate_nonce(recomputed, DEMO_DIFFICULTY)
-    rule("LAB 1 DEMO PASSED")
+    rule("Lab 1 Demo Passed")
 
 
 if __name__ == "__main__":
