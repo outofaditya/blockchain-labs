@@ -11,12 +11,10 @@ from ipv8.configuration import (
     WalkerDefinition,
     default_bootstrap_defs,
 )
-from ipv8.community import Community, CommunitySettings
 from ipv8.lazy_community import lazy_wrapper
+from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from common.banner import rule, section, rows
-from common.paths import REPO_ROOT
 from labs.three.chain import (
     Tx,
     Block,
@@ -29,6 +27,8 @@ from labs.three.chain import (
     GENESIS_HASH,
     compute_block_hash,
 )
+from common.paths import REPO_ROOT
+from common.banner import rule, rows, section
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -155,12 +155,15 @@ class RegistrationCommunity(Community):
     # binds the handler and schedules the retry until the server replies once
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
+        # initial state plus a slot for the sibling chain overlay reference
         self.registered = False
         self.chain = None
         self._quorum_logged = False
         # first member in the canonical group order is the sole registrar
         self.is_registrar = self.my_peer.public_key.key_to_bin() == MEMBER_KEYS[0]
+        # always register the response handler so observers still see the verdict
         self.add_message_handler(RegisterResponse, self.on_register_response)
+        # only the registrar runs the periodic send task
         if self.is_registrar:
             self.register_task("register", self._register, interval=2.0, delay=3.0)
         role = "registrar" if self.is_registrar else "observer"
@@ -177,8 +180,10 @@ class RegistrationCommunity(Community):
 
     # one shot send guarded by registered flag server peer discovery and chain overlay quorum
     async def _register(self) -> None:
+        # skip once we already received a verdict or the server peer is missing
         if self.registered or (server := self._server_peer()) is None:
             return
+        # block sending until the chain overlay has all three nodes mutually discovered
         if not self._chain_quorum():
             return
         self.ez_send(server, RegisterBlockchain(GROUP_ID, CHAIN_COMMUNITY_ID))
@@ -187,12 +192,14 @@ class RegistrationCommunity(Community):
     def _chain_quorum(self) -> bool:
         if self.chain is None:
             return False
+        # snapshot the current chain overlay peers and check teammate presence
         present = {p.public_key.key_to_bin() for p in self.chain.get_peers()}
         ready = self.chain._teammate_keys.issubset(present)
+        # log the transition exactly once so the operator sees the gate fire
         if ready and not self._quorum_logged:
             self._quorum_logged = True
             print(
-                "Quorum: all 3 nodes present in chain community — sending RegisterBlockchain"
+                "Quorum: all 3 nodes present in chain community sending RegisterBlockchain"
             )
         return ready
 
@@ -213,12 +220,16 @@ class ChainCommunity(Community):
     # owns the chain and mempool wires all handlers and prepares the reorg buffer
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
+        # local chain and mempool seed the protocol state
         self.chain = Chain()
         self.mempool = Mempool()
+        # capture our own key so teammate filters can exclude us
         my_key = self.my_peer.public_key.key_to_bin()
         self._teammate_keys = set(MEMBER_KEYS) - {my_key}
+        # side pool keeps every non tip block reachable for reorg or walk back
         self._pool: dict[bytes, Block] = {GENESIS_HASH: GENESIS}
         self._inflight: set[bytes] = set()
+        # bind each payload class to its handler so ipv8 dispatches correctly
         for cls, handler in (
             (SubmitTransaction, self.on_submit_transaction),
             (GetChainHeight, self.on_get_chain_height),
@@ -227,6 +238,7 @@ class ChainCommunity(Community):
             (BlockResponse, self.on_block_response),
         ):
             self.add_message_handler(cls, handler)
+        # periodic status print so the operator can see discovery progress
         self.register_task("status", self._status_tick, interval=5.0, delay=5.0)
         print(f"Joined ChainCommunity id={CHAIN_COMMUNITY_ID!r}")
 
@@ -281,11 +293,13 @@ class ChainCommunity(Community):
     # rebuilds the tx from the wire fields and gates it through the mempool signature check
     @lazy_wrapper(SubmitTransaction)
     def on_submit_transaction(self, peer, payload):
+        # only the published server is allowed to push transactions
         if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         server = self._server_peer()
         if server is None:
             return
+        # add to the mempool and reply with the resulting tx hash or a rejection
         self._log("SERVER", "SubmitTransaction")
         tx = Tx(payload.sender_key, payload.data, payload.timestamp, payload.signature)
         tx_hash = self.mempool.add(tx)
@@ -310,18 +324,22 @@ class ChainCommunity(Community):
             ),
         )
 
-    # serves both the server's grading queries and teammate walk-back requests
+    # serves both the server grading queries and teammate walk back requests
     @lazy_wrapper(GetBlock)
     def on_get_block(self, peer, payload):
+        # allow the server plus the three registered members
         sender = peer.public_key.key_to_bin()
         if sender != SERVER_PUBLIC_KEY and sender not in MEMBER_KEYS:
             return
+        # log which side asked so the operator can read the flow at a glance
         origin = "SERVER" if sender == SERVER_PUBLIC_KEY else "PEER"
         self._log(f"{origin}", f"GetBlock height={payload.height}")
+        # look up the requested block and resolve the asking peer for the reply
         block = self.chain.by_height.get(payload.height)
         target = self._peer_with_key(sender)
         if block is None or target is None:
             return
+        # build the full block response with header fields plus concatenated tx hashes
         block_hash = compute_block_hash(pack_header(block))
         self.ez_send(
             target,
@@ -366,11 +384,14 @@ class ChainCommunity(Community):
     def _ingest_block(
         self, sender_key: bytes, block: Block, height: int, rebroadcast: bool
     ) -> None:
+        # silently drop any block we already hold either on chain or in the pool
         block_hash = compute_block_hash(pack_header(block))
         if block_hash in self.chain.by_hash or block_hash in self._pool:
             return
+        # park the block and mark any pending walk back request as fulfilled
         self._pool[block_hash] = block
         self._inflight.discard(block_hash)
+        # dispatch on the chain status
         status, parent_hash = self.chain.try_extend(block)
         if status is AppendStatus.INVALID:
             self._log("INVALID", f"height={height}")
@@ -379,12 +400,14 @@ class ChainCommunity(Community):
         if status is AppendStatus.NEEDS_PARENT:
             self._kick_walk_back(sender_key, block, parent_hash, height)
             return
+        # extend or branch both clear matching mempool txs and feed the reorg pass
         if status is AppendStatus.EXTENDS_TIP:
             self.mempool.remove(list(block.tx_hashes))
             self._log("EXTEND", f"height={self.chain.height}")
         else:
             self._log("FORK", f"height={height}")
         self._try_drain_and_reorg()
+        # rebroadcast only when we are on the gossip path and the block became the new tip
         if self.chain.tip_hash == block_hash and rebroadcast:
             self.broadcast_block(block, self.chain.height)
 
@@ -402,13 +425,15 @@ class ChainCommunity(Community):
             tx_hashes,
         )
 
-    # asks the gossiping peer for the orphan's parent unless that request is already inflight
+    # asks the gossiping peer for the orphan parent unless that request is already inflight
     def _kick_walk_back(
         self, sender_key: bytes, orphan: Block, parent_hash: bytes, orphan_height: int
     ) -> None:
+        # dedup repeated walk back requests for the same missing parent
         if parent_hash in self._inflight or parent_hash in self._pool:
             return
         self._inflight.add(parent_hash)
+        # send a GetBlock at the parent height back to the gossiping peer
         target = self._peer_with_key(sender_key)
         if target is not None:
             self._log("PARENT_REQ", f"height={orphan_height - 1}")
@@ -416,6 +441,7 @@ class ChainCommunity(Community):
 
     # greedily extends tip from pool blocks then adopts any strictly longer sibling chain
     def _try_drain_and_reorg(self) -> None:
+        # drain phase tries to extend the tip from pool blocks linking cleanly
         extended = True
         while extended:
             extended = False
@@ -430,6 +456,7 @@ class ChainCommunity(Community):
                     self._log("EXTEND", f"height={self.chain.height} drained")
                     extended = True
                     break
+        # reorg phase scans the pool for a strictly longer chain ending at genesis
         best_chain = None
         for cand_hash, cand in self._pool.items():
             if cand_hash in self.chain.by_hash:
@@ -439,6 +466,7 @@ class ChainCommunity(Community):
                 continue
             if best_chain is None or len(candidate) > len(best_chain):
                 best_chain = candidate
+        # adopt the best candidate when it strictly beats our current chain length
         if best_chain is not None and len(best_chain) > len(self.chain.blocks):
             if self.chain.adopt_fork(best_chain):
                 self._log("REORG", f"new_tip_height={self.chain.height}")
@@ -447,10 +475,12 @@ class ChainCommunity(Community):
 
     # walks prev_hash links back through pool union chain returning a full chain or None
     def _walk_to_genesis(self, block_hash: bytes) -> list[Block] | None:
+        # collect ancestors by following prev_hash until genesis or a missing parent
         ancestors: list[Block] = []
         cursor = block_hash
         seen: set[bytes] = set()
         while cursor != GENESIS_HASH:
+            # break on a cycle which can only mean a malformed pool entry
             if cursor in seen:
                 return None
             seen.add(cursor)
@@ -459,6 +489,7 @@ class ChainCommunity(Community):
                 return None
             ancestors.append(block)
             cursor = block.prev_hash
+        # prepend genesis and reverse so the result reads from genesis to tip
         ancestors.append(GENESIS)
         ancestors.reverse()
         return ancestors
@@ -466,6 +497,7 @@ class ChainCommunity(Community):
 
 # boots ipv8 with both overlays bound to the same key and blocks forever
 async def main(port: int) -> None:
+    # build the ipv8 configuration with both lab 3 overlays bound to the same key
     walker = [WalkerDefinition(Strategy.RandomWalk, 20, {"timeout": 3.0})]
     builder = (
         ConfigBuilder(clean=True)
@@ -483,6 +515,7 @@ async def main(port: int) -> None:
         )
     )
 
+    # bootstrap ipv8 and start both communities
     ipv8 = IPv8(
         builder.finalize(),
         extra_communities={
@@ -492,15 +525,18 @@ async def main(port: int) -> None:
     )
     await ipv8.start()
 
+    # cross link the registration overlay to the chain overlay for quorum checks
     chain_overlay = ipv8.get_overlay(ChainCommunity)
     reg_overlay = ipv8.get_overlay(RegistrationCommunity)
     reg_overlay.chain = chain_overlay
 
+    # broadcast callback hooks the mining loop into the chain community
     async def broadcast(block: Block) -> None:
         height = chain_overlay.chain.height
         chain_overlay._log("MINED", f"height={height} nonce={block.nonce}")
         chain_overlay.broadcast_block(block, height)
 
+    # launch the mining loop as a background asyncio task
     asyncio.create_task(
         mining_loop(
             chain_overlay.chain,
@@ -522,7 +558,7 @@ async def main(port: int) -> None:
         ],
         label_width=12,
     )
-    section("MINING CONTINUOUSLY — WAITING FOR PEER DISCOVERY AND SERVER TRAFFIC")
+    section("MINING CONTINUOUSLY WAITING FOR PEER DISCOVERY AND SERVER TRAFFIC")
 
     # never set so the node runs until ctrl c
     await asyncio.Event().wait()

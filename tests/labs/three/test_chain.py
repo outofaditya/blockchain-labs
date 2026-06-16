@@ -1,32 +1,33 @@
 import asyncio
-from hashlib import sha256
 from os import urandom
+from hashlib import sha256
 
 import pytest
 from ipv8.keyvault.crypto import default_eccrypto
 
 from labs.three.chain import (
-    GENESIS,
-    GENESIS_HASH,
-    AppendStatus,
+    Tx,
     Block,
     Chain,
+    GENESIS,
     Mempool,
-    Tx,
-    compute_block_hash,
-    compute_tx_hash,
-    compute_txs_hash,
-    has_leading_zero_bits,
     mine_block,
     mining_loop,
     pack_header,
+    AppendStatus,
+    GENESIS_HASH,
     validate_block,
+    compute_tx_hash,
+    compute_txs_hash,
+    compute_block_hash,
+    has_leading_zero_bits,
 )
 
 NOW = 1_700_000_000
 ZERO_HASH = b"\x00" * 32
 
 
+# helper that mines a valid parent and child pair for shared use across tests
 def _mine_pair(difficulty: int = 8):
     empty = compute_txs_hash(())
     p_nonce, p_hash = mine_block(ZERO_HASH, empty, difficulty, NOW)
@@ -38,7 +39,7 @@ def _mine_pair(difficulty: int = 8):
     return parent, child
 
 
-# empty body hashes as sha256(b"") not 32 zero bytes
+# empty body hashes as sha256 of empty bytes not 32 zero bytes
 def test_empty_body_uses_sha256_of_empty_bytes():
     assert compute_txs_hash(()) == sha256(b"").digest()
 
@@ -53,7 +54,7 @@ def test_compute_tx_hash_uniqueness():
     assert len({h1, h2, h3}) == 3
 
 
-# leading-zero-bit check honors full bytes and remainder bits
+# leading zero bit check honors full bytes and remainder bits
 def test_has_leading_zero_bits_byte_boundary():
     assert has_leading_zero_bits(b"\x00\x00\xff", 16)
     assert not has_leading_zero_bits(b"\x00\x00\xff", 17)
@@ -67,13 +68,13 @@ def test_header_packs_to_exactly_84_bytes():
     assert len(pack_header(child)) == 84
 
 
-# honest parent-child passes the three-check validator
+# honest parent and child passes the three check validator
 def test_validate_block_accepts_honest_child():
     parent, child = _mine_pair()
     assert validate_block(child, parent)
 
 
-# tampering prev_hash, txs_hash, or nonce breaks validation
+# tampering prev_hash or txs_hash or nonce breaks validation
 @pytest.mark.parametrize("field", ["prev_hash", "txs_hash", "nonce"])
 def test_validate_block_rejects_tampered_field(field):
     parent, child = _mine_pair()
@@ -107,7 +108,7 @@ def test_validate_block_rejects_tampered_field(field):
     assert not validate_block(tampered, parent)
 
 
-# invalid-signature transaction is dropped before entering the pool
+# invalid signature transaction is dropped before entering the pool
 def test_mempool_rejects_invalid_signature():
     pool = Mempool()
     bogus = Tx(urandom(74), b"hi", NOW, b"\x00" * 64)
@@ -149,7 +150,7 @@ def test_try_extend_reports_known_block_on_duplicate():
     assert status is AppendStatus.KNOWN_BLOCK
 
 
-# child of a known but non-tip ancestor reports FORK_BRANCH
+# child of a known but non tip ancestor reports FORK_BRANCH
 def test_try_extend_reports_fork_branch_for_sibling():
     chain = Chain()
     empty_txs = compute_txs_hash(())
@@ -217,7 +218,7 @@ def test_adopt_fork_swaps_to_longer_chain():
     assert chain.by_height[3] is fork[3]
 
 
-# end-to-end: tx enters mempool, mining_loop mines it, pool clears, chain grows
+# end to end integration tx enters mempool mining_loop mines it pool clears chain grows
 async def test_mining_loop_clears_mempool_and_grows_chain():
     chain = Chain()
     pool = Mempool()

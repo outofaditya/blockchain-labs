@@ -1,9 +1,9 @@
 from hashlib import sha256
 
-from labs.one.miner import DIFFICULTY, EMAIL, GITHUB_URL, PREFIX, validate_nonce, worker
+from labs.one.miner import EMAIL, PREFIX, worker, DIFFICULTY, GITHUB_URL, validate_nonce
 
 
-# precomputed prefix is exactly email + "\n" + url + "\n" in UTF-8
+# precomputed prefix is exactly email plus newline plus url plus newline in UTF 8
 def test_prefix_construction():
     expected = EMAIL.encode() + b"\n" + GITHUB_URL.encode() + b"\n"
     assert PREFIX == expected
@@ -14,7 +14,7 @@ def test_difficulty_matches_spec():
     assert DIFFICULTY == 28
 
 
-# leading-zero validator honors both full bytes and remainder bits
+# leading zero validator honors both full bytes and remainder bits
 def test_validate_nonce_byte_boundary():
     assert validate_nonce(b"\x00\x00\xff" + b"\x00" * 29, 16)
     assert not validate_nonce(b"\x00\x00\xff" + b"\x00" * 29, 17)
@@ -22,7 +22,7 @@ def test_validate_nonce_byte_boundary():
     assert not validate_nonce(b"\x00\x10" + b"\x00" * 30, 12)
 
 
-# an all-zero digest satisfies any difficulty
+# an all zero digest satisfies any difficulty
 def test_validate_nonce_full_zero_passes_any_difficulty():
     assert validate_nonce(b"\x00" * 32, 256)
 
@@ -45,4 +45,4 @@ def test_known_nonce_satisfies_low_difficulty():
         h.update(nonce.to_bytes(8, "big", signed=True))
         if validate_nonce(h.digest(), 8):
             return
-    raise AssertionError("Expected a difficulty-8 nonce within 1024 attempts")
+    raise AssertionError("Expected a difficulty 8 nonce within 1024 attempts")

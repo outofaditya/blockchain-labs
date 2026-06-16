@@ -10,12 +10,12 @@ from ipv8.configuration import (
     WalkerDefinition,
     default_bootstrap_defs,
 )
-from ipv8.community import Community, CommunitySettings
 from ipv8.lazy_community import lazy_wrapper
+from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from common.banner import rule, rows, divider
 from common.paths import REPO_ROOT
+from common.banner import rule, rows, divider
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -118,17 +118,21 @@ class SignerCommunity(Community):
     # sets up state events handlers and the run rounds task with a short delay
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
+        # derive the member slot from the local public key against the canonical list
         self.my_member_index = (
             MEMBER_KEYS.index(self.my_peer.public_key.key_to_bin()) + 1
         )
+        # session level state shared with run_rounds and the handlers
         self.done = asyncio.Event()
         self.current_round = 0
         self.current_nonce: bytes | None = None
         self.signatures: dict[int, bytes] = {}
+        # round level events bridge the synchronous handlers and the async driver
         self.nonce_event = asyncio.Event()
         self.sigs_event = asyncio.Event()
         self.round_done_event = asyncio.Event()
 
+        # wire each payload class to its handler so ipv8 dispatches correctly
         for cls, handler in (
             (GroupResponse, self.on_group_response),
             (ChallengeResponse, self.on_challenge_response),
@@ -138,6 +142,7 @@ class SignerCommunity(Community):
         ):
             self.add_message_handler(cls, handler)
 
+        # delay run_rounds slightly so the walker can discover the first peers
         self.register_task("run_rounds", self.run_rounds, delay=3.0)
 
     # filters discovered peers down to the one matching the published server key
@@ -216,7 +221,9 @@ class SignerCommunity(Community):
 
     # blocks the driver until both teammates and the server are discovered
     async def _wait_for_peers(self) -> None:
+        # build the list of teammate indexes we expect to see
         teammates = [i for i in (1, 2, 3) if i != self.my_member_index]
+        # spin until the server peer and every teammate peer appear
         while True:
             if self._server_peer() and all(self._member_peer(i) for i in teammates):
                 return
@@ -224,6 +231,7 @@ class SignerCommunity(Community):
 
     # main driver looping the three rounds and dispatching by role
     async def run_rounds(self) -> None:
+        # print the local member banner so the operator sees which slot is running
         rule("LAB 2 SIGNATURE CLIENT")
         rows(
             [("Member Index", self.my_member_index), ("Group ID", GROUP_ID)],
@@ -231,9 +239,11 @@ class SignerCommunity(Community):
         )
         divider()
 
+        # block until the wider community is reachable
         await self._wait_for_peers()
         print("Peers Discovered. Starting 3 Rounds.\n")
 
+        # iterate over the three rounds dispatching by submitter slot
         start = asyncio.get_event_loop().time()
         for round_num in (1, 2, 3):
             self._reset_round(round_num)
@@ -246,10 +256,12 @@ class SignerCommunity(Community):
             else:
                 await self._non_submitter_flow(round_num)
 
+            # bail out of the loop if the round never completed
             if not self.round_done_event.is_set():
                 print(f"Round {round_num} Did Not Complete: Aborting")
                 break
 
+        # report the total elapsed time and unblock main
         elapsed = asyncio.get_event_loop().time() - start
         divider()
         rows([("Total Time", f"{elapsed:.2f}s")], label_width=14)
@@ -258,28 +270,34 @@ class SignerCommunity(Community):
 
     # active path requesting challenge sharing nonce collecting sigs and submitting bundle
     async def _submitter_flow(self, round_num: int) -> None:
+        # locate the server and the teammate slots we need to coordinate with
         server = self._server_peer()
         teammates = [i for i in (1, 2, 3) if i != self.my_member_index]
 
+        # request the round nonce with a short retry loop in case packets drop
         while not self.nonce_event.is_set() and not self.round_done_event.is_set():
             self.ez_send(server, ChallengeRequest(GROUP_ID))
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.nonce_event.wait(), timeout=1.0)
 
+        # abort if the server signalled an early rejection before any nonce landed
         if self.round_done_event.is_set():
-            return  # server rejected early
+            return
 
+        # forward the nonce to every teammate so they can sign in parallel
         for idx in teammates:
             peer = self._member_peer(idx)
             if peer:
                 self.ez_send(peer, NonceShare(round_num, self.current_nonce))
 
+        # sign locally and seal early if all three signatures are already present
         self.signatures[self.my_member_index] = self.crypto.create_signature(
             self.my_peer.key, self.current_nonce
         )
         if len(self.signatures) == 3:
             self.sigs_event.set()
 
+        # collect missing teammate signatures with a one second retry per gap
         while len(self.signatures) < 3:
             try:
                 await asyncio.wait_for(self.sigs_event.wait(), timeout=1.0)
@@ -292,6 +310,7 @@ class SignerCommunity(Community):
                                 peer, NonceShare(round_num, self.current_nonce)
                             )
 
+        # bundle and submit until the server confirms the round
         bundle = SignatureBundle(
             GROUP_ID,
             round_num,
@@ -306,9 +325,10 @@ class SignerCommunity(Community):
 
     # passive path waiting for nonce signing and firing the signature three times
     async def _non_submitter_flow(self, round_num: int) -> None:
+        # block until the submitter shares the round nonce
         await self.nonce_event.wait()
 
-        # fire 3 times for udp loss resilience
+        # sign once and fire three copies with a small delay for udp loss resilience
         sig = self.crypto.create_signature(self.my_peer.key, self.current_nonce)
         submitter = self._member_peer(round_num)
         if submitter:
@@ -318,7 +338,7 @@ class SignerCommunity(Community):
                 )
                 await asyncio.sleep(0.05)
 
-        # non submitters get no server feedback so mark done locally
+        # non submitters never see a server verdict so the round closes locally
         self.round_done_event.set()
 
     # sends the three member public keys to the server to (re)register the group
@@ -333,6 +353,7 @@ class SignerCommunity(Community):
 
 # wires up ipv8 starts the signer community and waits for the round protocol to finish
 async def main(pem_path: str, port: int) -> None:
+    # build the ipv8 configuration including the signer overlay
     builder = (
         ConfigBuilder(clean=True)
         .set_port(port)
@@ -351,11 +372,13 @@ async def main(pem_path: str, port: int) -> None:
         )
     )
 
+    # bootstrap the ipv8 service and start the overlay
     ipv8 = IPv8(
         builder.finalize(), extra_communities={"SignerCommunity": SignerCommunity}
     )
     await ipv8.start()
 
+    # block on the round protocol completion then shut down cleanly
     community = ipv8.get_overlay(SignerCommunity)
     await community.done.wait()
     await ipv8.stop()

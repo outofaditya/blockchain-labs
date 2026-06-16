@@ -10,13 +10,13 @@ from ipv8.configuration import (
     WalkerDefinition,
     default_bootstrap_defs,
 )
-from ipv8.community import Community, CommunitySettings
 from ipv8.lazy_community import lazy_wrapper
+from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from common.banner import rule, section, rows
 from common.paths import REPO_ROOT
 from labs.one.miner import EMAIL, GITHUB_URL
+from common.banner import rule, rows, section
 
 logging.basicConfig(level=logging.CRITICAL)
 COMMUNITY_ID = bytes.fromhex("2c1cc6e35ff484f99ebdfb6108477783c0102881")
@@ -61,14 +61,17 @@ class Lab1Community(Community):
 
     # scheduled periodically because peer discovery takes time after boot
     async def find_and_submit(self) -> None:
+        # bail out before the nonce is supplied or once the submission has fired
         if self.nonce is None or self.submitted:
             return
 
+        # report any change in the discovered peer count so the operator sees progress
         peers = self.get_peers()
         if len(peers) != self.last_peer_count:
             print(f"{'Peers Found':<15}: {len(peers)}")
             self.last_peer_count = len(peers)
 
+        # scan peers for the published server key and send exactly once
         for peer in peers:
             if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
                 self.submitted = True
@@ -89,8 +92,10 @@ class Lab1Community(Community):
 
 # wires up ipv8 community and waits for the server response before stopping
 async def main(nonce: int) -> None:
+    # resolve the key file path from the environment with a default per member
     key_file = os.environ.get("KEY_PATH", os.path.join(REPO_ROOT, "keys", "aditya.pem"))
 
+    # build the ipv8 configuration including the lab1 overlay
     builder = (
         ConfigBuilder(clean=True)
         .set_port(8090)
@@ -109,9 +114,11 @@ async def main(nonce: int) -> None:
         )
     )
 
+    # bootstrap the ipv8 service and start the overlay
     ipv8 = IPv8(builder.finalize(), extra_communities={"Lab1Community": Lab1Community})
     await ipv8.start()
 
+    # bind the nonce on the live overlay so the scheduled task can pick it up
     community = ipv8.get_overlay(Lab1Community)
     community.nonce = nonce
 
@@ -125,6 +132,7 @@ async def main(nonce: int) -> None:
     )
     section("DISCOVERY AND SUBMISSION")
 
+    # block until the response handler reports the server verdict
     await community.done.wait()
     await ipv8.stop()
 

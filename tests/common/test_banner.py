@@ -1,4 +1,4 @@
-from common.banner import divider, rows, rule, section
+from common.banner import rule, rows, divider, section
 
 
 # rule with a title prints the title between two equals lines

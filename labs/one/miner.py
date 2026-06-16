@@ -4,18 +4,18 @@ from struct import Struct
 from hashlib import sha256
 from multiprocessing import Event, Queue, Process
 
-from common.banner import rule, section, rows
+from common.banner import rule, rows, section
 
 DIFFICULTY = 28
 EMAIL = "acpatil@tudelft.nl"
 GITHUB_URL = "https://github.com/outofaditya/blockchain-labs"
 PREFIX = EMAIL.encode() + b"\n" + GITHUB_URL.encode() + b"\n"
 
-# precompiled for the mining hot path
+# precompiled struct used to pack the 8 byte nonce field inside the hot loop
 _NONCE_STRUCT = Struct(">q")
 
 
-# checks leading zeros byte by byte to short circuit cheaply
+# checks leading zero bits one byte at a time so the loop can short circuit cheaply
 def validate_nonce(digest: bytes, bits: int) -> bool:
     full, rem = divmod(bits, 8)
     if any(digest[:full]):
@@ -23,26 +23,31 @@ def validate_nonce(digest: bytes, bits: int) -> bool:
     return not rem or digest[full] < (1 << (8 - rem))
 
 
-# each subprocess mines its own nonce stride so the search partitions without coordination
+# subprocess body that searches its own nonce stride and signals on success
 def worker(worker_id: int, num_workers: int, result_queue, stop_event):
+    # seed sha256 with the static prefix so only nonce bytes change per attempt
     base = sha256(PREFIX)
+    # each worker starts at its index so the strides never overlap
     nonce = worker_id
     while True:
+        # clone the cached prefix state and mix in the current nonce
         h = base.copy()
         h.update(_NONCE_STRUCT.pack(nonce))
         digest = h.digest()
+        # winning digest pushes the nonce to the parent and signals siblings to stop
         if validate_nonce(digest, DIFFICULTY):
             result_queue.put((nonce, digest))
             stop_event.set()
             return
         nonce += num_workers
-        # cheap power of 2 check fires every 16384 iterations
+        # cheap power of two check probes the stop event every 16384 attempts
         if nonce & 0x3FFF == 0 and stop_event.is_set():
             return
 
 
-# spawns one worker per core and returns as soon as any worker finds a valid nonce
+# launches one worker per core and returns the first valid nonce produced
 def mine():
+    # one subprocess per core saturates the cpu without overcommitting
     num_workers = os.cpu_count() or 1
     rule("PROOF-OF-WORK MINER PROGRAM")
     rows(
@@ -55,7 +60,9 @@ def mine():
     )
     section("MINING STARTED")
 
+    # shared queue and stop event coordinate winner detection across workers
     result_queue, stop_event = Queue(), Event()
+    # spawn one process per stride
     workers = [
         Process(target=worker, args=(i, num_workers, result_queue, stop_event))
         for i in range(num_workers)
@@ -64,6 +71,7 @@ def mine():
     for w in workers:
         w.start()
 
+    # blocks until any worker pushes a winning nonce
     nonce, digest = result_queue.get()
     elapsed = time.time() - start
 
@@ -76,6 +84,7 @@ def mine():
     )
     rule()
 
+    # tear down every worker so the parent process exits cleanly
     for w in workers:
         w.terminate()
     for w in workers:
