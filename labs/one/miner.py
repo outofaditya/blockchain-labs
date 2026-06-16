@@ -45,12 +45,14 @@ def worker(worker_id: int, num_workers: int, result_queue, stop_event):
 def mine():
     num_workers = os.cpu_count() or 1
     rule("PROOF-OF-WORK MINER PROGRAM")
-    rows([
-        ("Email", EMAIL),
-        ("GitHub URL", GITHUB_URL),
-        ("Workers", num_workers),
-        ("Difficulty", f"{DIFFICULTY} Leading Zero Bits"),
-    ])
+    rows(
+        [
+            ("Email", EMAIL),
+            ("GitHub URL", GITHUB_URL),
+            ("Workers", num_workers),
+            ("Difficulty", f"{DIFFICULTY} Leading Zero Bits"),
+        ]
+    )
     section("MINING STARTED")
 
     result_queue, stop_event = Queue(), Event()
@@ -65,11 +67,13 @@ def mine():
     nonce, digest = result_queue.get()
     elapsed = time.time() - start
 
-    rows([
-        ("Nonce", nonce),
-        ("Digest Value", digest.hex()),
-        ("Time Elapsed", f"{elapsed:.2f} seconds"),
-    ])
+    rows(
+        [
+            ("Nonce", nonce),
+            ("Digest Value", digest.hex()),
+            ("Time Elapsed", f"{elapsed:.2f} seconds"),
+        ]
+    )
     rule()
 
     for w in workers:

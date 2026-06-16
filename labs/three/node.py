@@ -12,6 +12,7 @@ from ipv8.configuration import (
     default_bootstrap_defs,
 )
 from ipv8.community import Community, CommunitySettings
+from ipv8.lazy_community import lazy_wrapper
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
 from common.banner import rule, section, rows
@@ -163,7 +164,9 @@ class RegistrationCommunity(Community):
         if self.is_registrar:
             self.register_task("register", self._register, interval=2.0, delay=3.0)
         role = "registrar" if self.is_registrar else "observer"
-        print(f"Joined RegistrationCommunity id={REGISTRATION_COMMUNITY_ID.hex()} role={role}")
+        print(
+            f"Joined RegistrationCommunity id={REGISTRATION_COMMUNITY_ID.hex()} role={role}"
+        )
 
     # filters discovered peers down to the one matching the published server key
     def _server_peer(self):
@@ -188,17 +191,15 @@ class RegistrationCommunity(Community):
         ready = self.chain._teammate_keys.issubset(present)
         if ready and not self._quorum_logged:
             self._quorum_logged = True
-            print("Quorum: all 3 nodes present in chain community — sending RegisterBlockchain")
+            print(
+                "Quorum: all 3 nodes present in chain community — sending RegisterBlockchain"
+            )
         return ready
 
     # verifies the reply came from the published server key then prints the verdict
-    def on_register_response(self, source_address: tuple, data: bytes) -> None:
-        try:
-            auth, _, payload = self._ez_unpack_auth(RegisterResponse, data)
-        except Exception as e:
-            logging.debug(f"Bad RegisterResponse from {source_address}: {e}")
-            return
-        if auth.public_key_bin != SERVER_PUBLIC_KEY:
+    @lazy_wrapper(RegisterResponse)
+    def on_register_response(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         status = "OK" if payload.success else "FAIL"
         print(f"Registration [{status}]: {payload.message}")
@@ -277,24 +278,13 @@ class ChainCommunity(Community):
                 return p
         return None
 
-    # generic decode plus sender check returns (sender_key, payload) or (None, None)
-    def _unpack(self, payload_cls, data, source_address, allowed):
-        try:
-            auth, _, payload = self._ez_unpack_auth(payload_cls, data)
-        except Exception as e:
-            logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
-            return None, None
-        if auth.public_key_bin not in allowed:
-            return None, None
-        return auth.public_key_bin, payload
-
     # rebuilds the tx from the wire fields and gates it through the mempool signature check
-    def on_submit_transaction(self, source_address: tuple, data: bytes) -> None:
-        _, payload = self._unpack(
-            SubmitTransaction, data, source_address, (SERVER_PUBLIC_KEY,)
-        )
+    @lazy_wrapper(SubmitTransaction)
+    def on_submit_transaction(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
+            return
         server = self._server_peer()
-        if payload is None or server is None:
+        if server is None:
             return
         self._log("SERVER", "SubmitTransaction")
         tx = Tx(payload.sender_key, payload.data, payload.timestamp, payload.signature)
@@ -305,12 +295,12 @@ class ChainCommunity(Community):
             self.ez_send(server, SubmitTransactionResponse(False, b"", "rejected"))
 
     # echoes back the request_id so the server can match concurrent queries
-    def on_get_chain_height(self, source_address: tuple, data: bytes) -> None:
-        _, payload = self._unpack(
-            GetChainHeight, data, source_address, (SERVER_PUBLIC_KEY,)
-        )
+    @lazy_wrapper(GetChainHeight)
+    def on_get_chain_height(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
+            return
         server = self._server_peer()
-        if payload is None or server is None:
+        if server is None:
             return
         self._log("SERVER", f"GetChainHeight request_id={payload.request_id}")
         self.ez_send(
@@ -321,11 +311,10 @@ class ChainCommunity(Community):
         )
 
     # serves both the server's grading queries and teammate walk-back requests
-    def on_get_block(self, source_address: tuple, data: bytes) -> None:
-        sender, payload = self._unpack(
-            GetBlock, data, source_address, (SERVER_PUBLIC_KEY, *MEMBER_KEYS)
-        )
-        if payload is None:
+    @lazy_wrapper(GetBlock)
+    def on_get_block(self, peer, payload):
+        sender = peer.public_key.key_to_bin()
+        if sender != SERVER_PUBLIC_KEY and sender not in MEMBER_KEYS:
             return
         origin = "SERVER" if sender == SERVER_PUBLIC_KEY else "PEER"
         self._log(f"{origin}", f"GetBlock height={payload.height}")
@@ -349,9 +338,10 @@ class ChainCommunity(Community):
         )
 
     # gossip entry from a teammate broadcast triggers rebroadcast on success
-    def on_new_block(self, source_address: tuple, data: bytes) -> None:
-        sender, payload = self._unpack(NewBlock, data, source_address, MEMBER_KEYS)
-        if payload is None:
+    @lazy_wrapper(NewBlock)
+    def on_new_block(self, peer, payload):
+        sender = peer.public_key.key_to_bin()
+        if sender not in MEMBER_KEYS:
             return
         self._log("RECV", f"NewBlock height={payload.height}")
         self._ingest_block(
@@ -359,9 +349,10 @@ class ChainCommunity(Community):
         )
 
     # walk back reply we asked for so no rebroadcast on success
-    def on_block_response(self, source_address: tuple, data: bytes) -> None:
-        sender, payload = self._unpack(BlockResponse, data, source_address, MEMBER_KEYS)
-        if payload is None:
+    @lazy_wrapper(BlockResponse)
+    def on_block_response(self, peer, payload):
+        sender = peer.public_key.key_to_bin()
+        if sender not in MEMBER_KEYS:
             return
         self._log("PARENT_RECV", f"height={payload.height}")
         self._ingest_block(
@@ -520,14 +511,17 @@ async def main(port: int) -> None:
     )
 
     rule("LAB 3 BLOCKCHAIN NODE")
-    rows([
-        ("Key File", KEY_PATH),
-        ("Port", port),
-        ("Group ID", GROUP_ID),
-        ("Chain ID", CHAIN_COMMUNITY_ID.decode()),
-        ("Difficulty", f"{MINING_DIFFICULTY} leading zero bits"),
-        ("Public Key", chain_overlay.my_peer.public_key.key_to_bin().hex()),
-    ], label_width=12)
+    rows(
+        [
+            ("Key File", KEY_PATH),
+            ("Port", port),
+            ("Group ID", GROUP_ID),
+            ("Chain ID", CHAIN_COMMUNITY_ID.decode()),
+            ("Difficulty", f"{MINING_DIFFICULTY} leading zero bits"),
+            ("Public Key", chain_overlay.my_peer.public_key.key_to_bin().hex()),
+        ],
+        label_width=12,
+    )
     section("MINING CONTINUOUSLY — WAITING FOR PEER DISCOVERY AND SERVER TRAFFIC")
 
     # never set so the node runs until ctrl c

@@ -11,6 +11,7 @@ from ipv8.configuration import (
     default_bootstrap_defs,
 )
 from ipv8.community import Community, CommunitySettings
+from ipv8.lazy_community import lazy_wrapper
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
 from common.banner import rule, section, rows
@@ -76,15 +77,10 @@ class Lab1Community(Community):
                 return
 
     # handles the server reply and signals the main coroutine to exit
-    def on_response(self, source_address: tuple, data: bytes) -> None:
-        try:
-            auth, _, payload = self._ez_unpack_auth(ResponsePayload, data)
-        except Exception as e:
-            logging.debug(f"Bad Packet from {source_address}: {e}")
+    @lazy_wrapper(ResponsePayload)
+    def on_response(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
-        if auth.public_key_bin != SERVER_PUBLIC_KEY:
-            return
-
         section("SERVER RESPONSE")
         rows([("Success", payload.success), ("Message", payload.message)])
         rule()
@@ -120,11 +116,13 @@ async def main(nonce: int) -> None:
     community.nonce = nonce
 
     rule("IPv8 SUBMISSION CLIENT")
-    rows([
-        ("Key File", key_file),
-        ("Public Key", community.my_peer.public_key.key_to_bin().hex()),
-        ("Nonce", nonce),
-    ])
+    rows(
+        [
+            ("Key File", key_file),
+            ("Public Key", community.my_peer.public_key.key_to_bin().hex()),
+            ("Nonce", nonce),
+        ]
+    )
     section("DISCOVERY AND SUBMISSION")
 
     await community.done.wait()

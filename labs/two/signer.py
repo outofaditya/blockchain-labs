@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 import contextlib
@@ -12,9 +11,10 @@ from ipv8.configuration import (
     default_bootstrap_defs,
 )
 from ipv8.community import Community, CommunitySettings
+from ipv8.lazy_community import lazy_wrapper
 from ipv8.messaging.payload_dataclass import DataClassPayload, convert_to_payload
 
-from common.banner import rule, section, rows, divider
+from common.banner import rule, rows, divider
 from common.paths import REPO_ROOT
 
 logging.basicConfig(level=logging.CRITICAL)
@@ -169,23 +169,10 @@ class SignerCommunity(Community):
         self.sigs_event.clear()
         self.round_done_event.clear()
 
-    # shared decode and sender verification used by every handler
-    def _unpack(self, payload_cls, data, source_address, allowed_keys):
-        try:
-            auth, _, payload = self._ez_unpack_auth(payload_cls, data)
-        except Exception as e:
-            logging.debug(f"Bad {payload_cls.__name__} from {source_address}: {e}")
-            return None
-        if auth.public_key_bin not in allowed_keys:
-            return None
-        return payload
-
     # handler for the registration acknowledgement from the server
-    def on_group_response(self, source_address, data):
-        payload = self._unpack(
-            GroupResponse, data, source_address, (SERVER_PUBLIC_KEY,)
-        )
-        if payload is None:
+    @lazy_wrapper(GroupResponse)
+    def on_group_response(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         print(
             f"Registration: success={payload.success} "
@@ -193,36 +180,40 @@ class SignerCommunity(Community):
         )
 
     # handler for the server nonce received by the round submitter
-    def on_challenge_response(self, source_address, data):
-        payload = self._unpack(
-            ChallengeResponse, data, source_address, (SERVER_PUBLIC_KEY,)
-        )
-        if payload is None or payload.round_number != self.current_round:
+    @lazy_wrapper(ChallengeResponse)
+    def on_challenge_response(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
+            return
+        if payload.round_number != self.current_round:
             return
         self.current_nonce = payload.nonce
         self.nonce_event.set()
 
     # handler for the submitter forwarding the nonce to a non submitter
-    def on_nonce_share(self, source_address, data):
-        payload = self._unpack(NonceShare, data, source_address, MEMBER_KEYS)
-        if payload is None or payload.round_number != self.current_round:
+    @lazy_wrapper(NonceShare)
+    def on_nonce_share(self, peer, payload):
+        if peer.public_key.key_to_bin() not in MEMBER_KEYS:
+            return
+        if payload.round_number != self.current_round:
             return
         self.current_nonce = payload.nonce
         self.nonce_event.set()
 
     # handler for a teammate signature received by the submitter
-    def on_signature_share(self, source_address, data):
-        payload = self._unpack(SignatureShare, data, source_address, MEMBER_KEYS)
-        if payload is None or payload.round_number != self.current_round:
+    @lazy_wrapper(SignatureShare)
+    def on_signature_share(self, peer, payload):
+        if peer.public_key.key_to_bin() not in MEMBER_KEYS:
+            return
+        if payload.round_number != self.current_round:
             return
         self.signatures[payload.member_index] = payload.signature
         if len(self.signatures) == 3:
             self.sigs_event.set()
 
     # handler for the server verdict on a bundle or early rejection
-    def on_round_result(self, source_address, data):
-        payload = self._unpack(RoundResult, data, source_address, (SERVER_PUBLIC_KEY,))
-        if payload is None:
+    @lazy_wrapper(RoundResult)
+    def on_round_result(self, peer, payload):
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         status = "OK" if payload.success else "FAIL"
         print(f"Round {payload.round_number} [{status}]: {payload.message}")
@@ -239,7 +230,10 @@ class SignerCommunity(Community):
     # main driver looping the three rounds and dispatching by role
     async def run_rounds(self) -> None:
         rule("LAB 2 SIGNATURE CLIENT")
-        rows([("Member Index", self.my_member_index), ("Group ID", GROUP_ID)], label_width=14)
+        rows(
+            [("Member Index", self.my_member_index), ("Group ID", GROUP_ID)],
+            label_width=14,
+        )
         divider()
 
         await self._wait_for_peers()
