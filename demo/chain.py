@@ -14,8 +14,8 @@ from labs.three.chain import (
 )
 from common.banner import rule, rows, divider
 
-# difficulty kept low so every scenario finishes within a fraction of a second
-DIFFICULTY = 8
+# difficulty tuned so each mined block takes a noticeable fraction of a second
+DIFFICULTY = 18
 
 
 # wall clock timestamp used for both txs and block headers
@@ -78,17 +78,15 @@ def happy_path() -> None:
     # consistency check confirms every node ended at the same tip
     heights = [c.height for c, _ in nodes]
     tips = {c.tip_hash for c, _ in nodes}
+    converged = len(tips) == 1 and all(h == 4 for h in heights)
     rows(
         [
             ("Heights", heights),
             ("Unique Tips", len(tips)),
-            (
-                "Result",
-                "OK" if len(tips) == 1 and all(h == 4 for h in heights) else "FAIL",
-            ),
+            ("Status", "Converged" if converged else "Inconsistent"),
         ]
     )
-    assert all(h == 4 for h in heights) and len(tips) == 1
+    assert converged
 
 
 # scenario 2 orphan arrives before its parent and walk back fills the gap
@@ -116,13 +114,15 @@ def walk_back() -> None:
     s2 = deliver(b, block2)
     print(f"[Node 1] try_extend(block2) -> {s2.name}, Height={b.height}")
     divider()
+    resolved = b.height == 2 and a.tip_hash == b.tip_hash
     rows(
         [
             ("Final Height", b.height),
             ("Matches Node 0", a.tip_hash == b.tip_hash),
+            ("Status", "Walk-Back Resolved" if resolved else "Orphan Still Stuck"),
         ]
     )
-    assert b.height == 2 and a.tip_hash == b.tip_hash
+    assert resolved
 
 
 # scenario 3 shorter chain swaps to a longer sibling via adopt_fork
@@ -150,13 +150,15 @@ def reorg() -> None:
         f"New Tip={new_tip}..."
     )
     divider()
+    reorged = accepted and a.height == 3 and a.tip_hash == b.tip_hash
     rows(
         [
             ("New Height", a.height),
             ("Matches Node 1", a.tip_hash == b.tip_hash),
+            ("Status", "Reorg Adopted" if reorged else "Reorg Rejected"),
         ]
     )
-    assert accepted and a.height == 3 and a.tip_hash == b.tip_hash
+    assert reorged
 
 
 # runs all three scenarios back to back and prints a final pass banner
