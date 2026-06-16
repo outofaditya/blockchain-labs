@@ -45,7 +45,10 @@ class MockServer:
         # record the submitter and report the elapsed time against the budget
         self.submitters_seen.add(submitter_pub)
         elapsed = time.time() - self.start_time
-        return f"Round {round_num} Recorded At {elapsed:.2f}s Of {GROUP_BUDGET_SECONDS:.0f}s"
+        return (
+            f"Round {round_num} Recorded At {elapsed:.2f}s "
+            f"Of {GROUP_BUDGET_SECONDS:.0f}s"
+        )
 
 
 # runs the three round signing demo against a fresh mock server instance

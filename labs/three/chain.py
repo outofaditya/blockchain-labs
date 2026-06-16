@@ -252,7 +252,7 @@ class Chain:
         return AppendStatus.NEEDS_PARENT, block.prev_hash
 
 
-# verifies the ed25519 signature over sender_key data and timestamp at the mempool boundary
+# verifies the ed25519 signature over sender_key data and timestamp before mempool entry
 def verify_tx(tx: Tx) -> bool:
     try:
         pubkey = default_eccrypto.key_from_public_bin(tx.sender_key)
@@ -294,7 +294,7 @@ class Mempool:
         return list(self.pending.items())[:max_count]
 
 
-# snapshots up to max_txs from the mempool and precomputes the body commitment for mining
+# snapshots up to max_txs from the mempool and precomputes the body commitment
 def assemble_candidate(
     mempool: Mempool, max_txs: int = 1000
 ) -> tuple[bytes, tuple[bytes, ...]]:

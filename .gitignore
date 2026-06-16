@@ -1,7 +1,7 @@
 # Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
 *$py.class
+*.py[codz]
+__pycache__/
 
 # C extensions
 *.so
@@ -10,49 +10,49 @@ __pycache__/
 *.pem
 
 # Distribution / packaging
-.Python
-build/
-develop-eggs/
+lib/
+var/
+*.egg
 dist/
-downloads/
 eggs/
 .eggs/
-lib/
+build/
 lib64/
 parts/
 sdist/
-var/
+.Python
 wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 MANIFEST
+downloads/
+*.egg-info/
+develop-eggs/
+.installed.cfg
+share/python-wheels/
 
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
 *.spec
+*.manifest
 
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
-htmlcov/
-.tox/
 .nox/
-.coverage
-.coverage.*
+.tox/
 .cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
 cover/
+*.cover
+htmlcov/
+.coverage
+*.py.cover
+.coverage.*
+.hypothesis/
+coverage.xml
+nosetests.xml
+.pytest_cache/
 
 # Translations
 *.mo
@@ -60,8 +60,8 @@ cover/
 
 # Django stuff:
 *.log
-local_settings.py
 db.sqlite3
+local_settings.py
 db.sqlite3-journal
 
 # Flask stuff:
@@ -75,8 +75,8 @@ instance/
 docs/_build/
 
 # PyBuilder
-.pybuilder/
 target/
+.pybuilder/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -117,8 +117,8 @@ ipython_config.py
 #   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
 # pdm.lock
 # pdm.toml
-.pdm-python
 .pdm-build/
+.pdm-python
 
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
@@ -131,13 +131,13 @@ ipython_config.py
 __pypackages__/
 
 # Celery stuff
-celerybeat-schedule
 celerybeat.pid
+celerybeat-schedule
 
 # Redis
-*.rdb
 *.aof
 *.pid
+*.rdb
 
 # RabbitMQ
 mnesia/
@@ -152,17 +152,17 @@ activemq-data/
 
 # Environments
 .env
-.envrc
-.venv
-env/
-venv/
 ENV/
+env/
+.venv
+venv/
+.envrc
 env.bak/
 venv.bak/
 
 # Spyder project settings
-.spyderproject
 .spyproject
+.spyderproject
 
 # Rope project settings
 .ropeproject
@@ -171,9 +171,9 @@ venv.bak/
 /site
 
 # mypy
-.mypy_cache/
-.dmypy.json
 dmypy.json
+.dmypy.json
+.mypy_cache/
 
 # Pyre type checker
 .pyre/
@@ -213,9 +213,9 @@ tempCodeRunnerFile.py
 .pypirc
 
 # Marimo
-marimo/_static/
-marimo/_lsp/
 __marimo__/
+marimo/_lsp/
+marimo/_static/
 
 # Streamlit
 .streamlit/secrets.toml

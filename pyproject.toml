@@ -3,9 +3,9 @@ line-length = 88
 target-version = "py313"
 
 [tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
 line-ending = "lf"
+indent-style = "space"
+quote-style = "double"
 
 [tool.ruff.lint]
 select = ["F"]

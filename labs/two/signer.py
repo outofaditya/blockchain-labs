@@ -268,7 +268,7 @@ class SignerCommunity(Community):
         rule()
         self.done.set()
 
-    # active path requesting challenge sharing nonce collecting sigs and submitting bundle
+    # active path requesting challenge sharing nonce collecting sigs and submitting
     async def _submitter_flow(self, round_num: int) -> None:
         # locate the server and the teammate slots we need to coordinate with
         server = self._server_peer()

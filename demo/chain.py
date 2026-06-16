@@ -106,9 +106,8 @@ def walk_back() -> None:
     # block2 reaches node 1 before its parent landing as an orphan
     print("[Network] Block2 Arrives At Node 1 First; Block1 Delayed")
     status, parent_hash = b.try_extend(block2)
-    print(
-        f"[Node 1] try_extend(block2) -> {status.name}, Parent={parent_hash[:8].hex()}..."
-    )
+    parent_preview = parent_hash[:8].hex()
+    print(f"[Node 1] try_extend(block2) -> {status.name}, Parent={parent_preview}...")
     assert status is AppendStatus.NEEDS_PARENT
     # the delayed parent finally arrives and both blocks now land in order
     print("[Network] Block1 Arrives At Node 1 (Walk-Back Fulfilled)")
@@ -145,8 +144,10 @@ def reorg() -> None:
     print(f"[Node 1] Long Chain   Height={b.height}, Tip={b.tip_hash[:8].hex()}...")
     # node 0 receives node 1 chain and atomically swaps to the longer tip
     accepted = a.adopt_fork(long_chain)
+    new_tip = a.tip_hash[:8].hex()
     print(
-        f"[Node 0] adopt_fork() -> {accepted}, New Height={a.height}, New Tip={a.tip_hash[:8].hex()}..."
+        f"[Node 0] adopt_fork() -> {accepted}, New Height={a.height}, "
+        f"New Tip={new_tip}..."
     )
     divider()
     rows(
