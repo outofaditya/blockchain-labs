@@ -12,6 +12,8 @@ Each lab is a standalone IPv8 client that joins a course community over UDP, dis
 - [Lab 1 — Proof Of Work Over IPv8](#lab-1--proof-of-work-over-ipv8)
 - [Lab 2 — Coordinated Group Signing](#lab-2--coordinated-group-signing)
 - [Lab 3 — PoW Blockchain Over IPv8](#lab-3--pow-blockchain-over-ipv8)
+- [Demonstration](#demonstration)
+- [Testing](#testing)
 - [Optimizations](#optimizations)
 - [Identity And Keys](#identity-and-keys)
 - [Dependencies](#dependencies)
@@ -36,16 +38,22 @@ All three labs share the same foundation: an IPv8 peer that joins a community by
 │   └── three/
 │       ├── chain.py   # lab 3: block primitives, chain, mempool, mining
 │       └── node.py    # lab 3: ipv8 node hosting the chain community
+├── demo/
+│   ├── mine.py     # local proof-of-work walkthrough at reduced difficulty
+│   ├── sign.py     # three in-process signers running the round-robin protocol
+│   └── chain.py    # three-node simulation: happy path, walk-back, reorg
+├── tests/          # pytest suite mirroring labs/ + common/
 ├── tasks/          # original assignment briefs
 ├── keys/           # per-member IPv8 key files (gitignored, one .pem per member)
-└── pyproject.toml  # ruff configuration
+├── pyproject.toml  # ruff and pytest configuration
+└── requirements.txt
 ```
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install pyipv8 ruff
+.venv/bin/pip install -r requirements.txt
 ```
 
 Python 3.10 or newer is required. Each lab loads its IPv8 identity from a `.pem` file under `keys/`; `KEY_PATH` (env var, defaults to `keys/aditya.pem` for Lab 1) selects which one. Lab 1 generates a fresh key on first run if the target file does not exist.
@@ -96,6 +104,28 @@ export KEY_PATH=keys/<name>.pem
 ```
 
 The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `labs/three/node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
+
+## Demonstration
+
+Three local walkthroughs under `demo/` reproduce each lab's mechanics without a live server or real network. Each runs to completion in under a second on a laptop and ends with a pass/fail line.
+
+```bash
+.venv/bin/python -m demo.mine    # Lab 1: single-threaded PoW search at difficulty 20, with hash verification
+.venv/bin/python -m demo.sign    # Lab 2: three in-process signers, three rounds, round-robin submitters, mock server
+.venv/bin/python -m demo.chain   # Lab 3: happy-path consensus, walk-back orphan resolution, longest-chain reorg
+```
+
+The Lab 3 demo runs three scripted scenarios in sequence and asserts cross-node consistency at each stage.
+
+## Testing
+
+The pytest suite under `tests/` mirrors the source layout: `tests/labs/three/test_chain.py` covers chain primitives and the mining-loop integration, `tests/labs/one/test_miner.py` covers PoW search and validation, `tests/labs/two/test_signer.py` pins the group-signing invariants, `tests/common/` covers the shared helpers.
+
+```bash
+.venv/bin/pytest
+```
+
+The suite runs 32 tests in under half a second. Coverage follows a small-to-large progression: primitive functions first (hashing, byte-level zero checks, header packing), then validators, then mempool gates, then chain operations (append, try_extend, adopt_fork), ending with an end-to-end `mining_loop` integration that submits a real signed transaction, mines a block, and verifies the chain advanced.
 
 ## Optimizations
 
@@ -157,4 +187,6 @@ Your IPv8 private key (`keys/<name>.pem`) is your identity for the entire course
 | Package | Purpose |
 | --- | --- |
 | [`pyipv8`](https://pypi.org/project/pyipv8/) | Authenticated peer-to-peer networking framework |
+| [`pytest`](https://docs.pytest.org/) | Test runner (development only) |
+| [`pytest-asyncio`](https://pytest-asyncio.readthedocs.io/) | Async test support for the mining loop integration test |
 | [`ruff`](https://docs.astral.sh/ruff/) | Formatter and linter (development only) |
