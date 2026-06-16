@@ -330,7 +330,7 @@ class SignerCommunity(Community):
         # non submitters get no server feedback so mark done locally
         self.round_done_event.set()
 
-    # unused at runtime but kept for protocol completeness
+    # sends the three member public keys to the server to (re)register the group
     def _register_group(self) -> None:
         server = self._server_peer()
         if server is None:

@@ -34,7 +34,7 @@ logging.basicConfig(level=logging.CRITICAL)
 UNI_EMAIL = os.getenv("UNI_EMAIL")
 KEY_PATH = os.getenv("KEY_PATH")
 
-# registration community is fixed by the assignment so the lab 3 server can hear us
+# registration community published by the lab 3 server
 REGISTRATION_COMMUNITY_ID = bytes.fromhex("4c616233426c6f636b636861696e323032365057")
 SERVER_PUBLIC_KEY_HEX = "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6"
 SERVER_PUBLIC_KEY = bytes.fromhex(SERVER_PUBLIC_KEY_HEX)
@@ -45,7 +45,7 @@ CHAIN_COMMUNITY_ID = b"QuickFoxJumpsLazyDog"
 # group identity carried over from lab 2 since the lab 3 server checks group membership
 GROUP_ID = "814ee89d4621f005"
 
-# tuned so each block takes a few seconds making the demo readable in real time
+# leading zero bits required on every mined block header
 MINING_DIFFICULTY = 18
 
 # members in registration order
@@ -157,8 +157,7 @@ class RegistrationCommunity(Community):
         self.registered = False
         self.chain = None
         self._quorum_logged = False
-        # only the first member in the canonical group order owns registration so
-        # the server sees a single sender instead of three idempotent duplicates
+        # first member in the canonical group order is the sole registrar
         self.is_registrar = self.my_peer.public_key.key_to_bin() == MEMBER_KEYS[0]
         self.add_message_handler(RegisterResponse, self.on_register_response)
         if self.is_registrar:

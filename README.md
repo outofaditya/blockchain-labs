@@ -12,6 +12,7 @@ Each lab is a standalone IPv8 client that joins a course community over UDP, dis
 - [Lab 1 — Proof Of Work Over IPv8](#lab-1--proof-of-work-over-ipv8)
 - [Lab 2 — Coordinated Group Signing](#lab-2--coordinated-group-signing)
 - [Lab 3 — PoW Blockchain Over IPv8](#lab-3--pow-blockchain-over-ipv8)
+- [Optimizations](#optimizations)
 - [Identity And Keys](#identity-and-keys)
 - [Dependencies](#dependencies)
 
@@ -84,7 +85,7 @@ The group's three Ed25519 keys are baked into `labs/two/signer.py` in registrati
 
 A three-node proof-of-work blockchain. Each node mines blocks against an 84-byte header, gossips winning blocks to teammates, and answers the Lab 3 server's transaction-submission and chain-walking queries. Nodes converge on a single canonical chain via the longest-chain rule. The server walks all three chains and verifies PoW, header linking, body commitment, and three-way consistency.
 
-Mining is **demand-gated**: the loop idles behind an `asyncio.Event` until a server transaction lands, then mines exactly enough blocks to satisfy the three-confirmation rule before idling again. Fork resolution is handled by a side pool of every received block plus a longest-chain scan that atomically swaps tips via `adopt_fork` whenever a sibling chain overtakes the local one.
+Mining runs **continuously**: each node mines empty or transaction-bearing blocks against the current tip in a back-to-back loop, so a server transaction is buried in confirmations within seconds of arrival. Registration is gated on a **chain quorum** — one designated registrar (the first member in the canonical group order) only sends `RegisterBlockchain` after all three nodes are mutually discovered in the chain overlay, preventing the server from wasting its retry budget on absent peers. Fork resolution is handled by a side pool of every received block plus a longest-chain scan that atomically swaps tips via `adopt_fork` whenever a sibling chain overtakes the local one.
 
 **Run** (one terminal per member, ports distinct for local testing):
 
@@ -95,6 +96,57 @@ export KEY_PATH=keys/<name>.pem
 ```
 
 The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `labs/three/node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
+
+## Optimizations
+
+### Lab 1 Proof Of Work (`labs/one/miner.py`)
+
+- `Struct(">q")` precompiled — skips format parse per attempt.
+- `PREFIX` precomputed — invariant bytes hashed once, not per nonce.
+- `sha256(PREFIX).copy()` per nonce — only nonce bytes mixed in.
+- Byte-wise zero check with `any(digest[:full])` — short-circuits on first non-zero byte.
+- One subprocess per core, nonce stride partitioning — linear core scaling, zero coordination.
+- `stop_event` polled every 16,384 attempts — termination within ms, syscall cost invisible.
+
+### Lab 1 IPv8 Submission (`labs/one/client.py`)
+
+- Server filtered by published public key — ignores other students' peers and unsigned traffic.
+- `submitted` flag — one send per server match.
+
+### Lab 2 Group Signing (`labs/two/signer.py`)
+
+- `SUBMITTER_BY_ROUND` static — no leader-election message.
+- Three `asyncio.Event` primitives — bridge sync IPv8 handlers and async driver.
+- 1s retry on `ChallengeRequest` and `SignatureBundle` — leans on server idempotency.
+- Signature fanned out 3× at 50 ms spacing — UDP-loss tolerance without ACKs.
+- `NonceShare` re-broadcast on timeout — recovers from a lost share without a request protocol.
+
+### Lab 3 Chain Primitives (`labs/three/chain.py`)
+
+- `_HEADER_STRUCT`, `_PREFIX_STRUCT`, `_U64_STRUCT` precompiled — one struct call per packing.
+- `_EMPTY_TXS_HASH` constant — empty-body short-circuit.
+- `sha256(prefix).copy()` per nonce (mirrors Lab 1).
+- `Chain.by_hash` + `by_height` both maintained — O(1) lookup either way.
+- `AppendStatus` 5-status enum — handler dispatches without re-validation.
+- `adopt_fork` builds fresh indexes then atomically assigns — no half-applied fork.
+- Mempool verify-then-dedup — invalid txs never enter the pool.
+
+### Lab 3 Node Behaviour (`labs/three/node.py`)
+
+- `_teammate_keys` as a set — O(1) membership in every handler.
+- Single registrar (Pedro) — server sees one sender, not three duplicates.
+- `_chain_quorum` gate — registers only after all three nodes are mutually discovered; preserves the server's 3-retry budget.
+- `_pool` side-cache for FORK_BRANCH blocks — orphans stay reachable for later reorg.
+- Walk-back with `_inflight` dedup — bursts of orphans spawn one parent request, not N.
+- `_try_drain_and_reorg` runs both extend-from-pool and longest-chain-scan on every ingest.
+- Rebroadcast only on EXTENDS_TIP — prevents amplification on walk-back replies.
+- `_unpack` helper centralises auth decode + per-handler allow-list.
+
+### Cross-Cutting
+
+- `set_working_directory(REPO_ROOT)` — IPv8 state pinned to repo root regardless of cwd.
+- `set_walker_interval(0.5)` — halved from default, faster peer discovery.
+- All logging pinned to CRITICAL — keeps demo output clean.
 
 ## Identity And Keys
 

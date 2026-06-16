@@ -279,19 +279,16 @@ def assemble_candidate(
     return compute_txs_hash(tx_hashes), tx_hashes
 
 
-# continuously mines blocks against the current tip awaiting the gate when idle
+# continuously mines blocks against the current tip
 async def mining_loop(
     chain: Chain,
     mempool: Mempool,
     difficulty: int,
     broadcast=None,
     stop_event: asyncio.Event | None = None,
-    gate: asyncio.Event | None = None,
 ) -> None:
     loop = asyncio.get_event_loop()
     while stop_event is None or not stop_event.is_set():
-        if gate is not None:
-            await gate.wait()
         prev_hash = chain.tip_hash
         txs_hash, tx_hashes = assemble_candidate(mempool)
         timestamp = int(time.time())
