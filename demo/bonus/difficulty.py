@@ -1,39 +1,48 @@
-from bonus.difficulty import (
-    RETARGET_INTERVAL,
-    TARGET_BLOCK_SECONDS,
-    retarget,
-)
+import time
+
+from bonus.difficulty import RETARGET_INTERVAL, TARGET_BLOCK_SECONDS, retarget
+from labs.three.chain import mine_block
 from common.banner import rule, rows, divider, section
 
+# dummy hashes used as the static portion of the mined header
+_ZERO = b"\x00" * 32
+# every block prints with this minimum delay so even low difficulty rounds stay readable
+_FLOOR_SLEEP = 0.25
+# how many blocks each scenario runs for
+_BLOCKS = 16
 
-# simulates one network condition by feeding timestamps with a fixed inter block gap
-def simulate(label, gap_seconds, blocks=24, start_difficulty=18):
+
+# runs one scenario by mining real blocks while synthesizing the network cadence
+def simulate(label, gap_seconds, start_difficulty=18):
     section(label)
     timestamps = [0]
     difficulty = start_difficulty
-    snapshot = []
-    for h in range(1, blocks + 1):
-        # next block lands gap_seconds after the previous one
+    snapshots = []
+    for h in range(1, _BLOCKS + 1):
+        # actually mine a block so the demo time correlates with the current difficulty
+        start = time.time()
+        mine_block(_ZERO, _ZERO, difficulty, h)
+        mining_time = time.time() - start
+        # synthesized timestamp drives the retarget regardless of real wall clock
         timestamps.append(timestamps[-1] + gap_seconds)
-        snapshot.append((h, difficulty))
-        # network retargets at the boundary if applicable
+        print(
+            f"  Block {h:>2}  difficulty={difficulty:>2}  "
+            f"mined in {mining_time * 1000:>6.0f} ms"
+        )
+        # difficulty for the next block uses the synthesized timeline
         difficulty = retarget(h, timestamps, difficulty)
-    # only print one row per retarget boundary for readability
-    rows(
-        [
-            (f"After Block {h}", f"Difficulty {d}")
-            for h, d in snapshot
-            if h % RETARGET_INTERVAL == 0
-        ]
-    )
+        # floor sleep keeps the cadence visible even when mining is cheap
+        time.sleep(_FLOOR_SLEEP)
+    snapshots.append(("Final Difficulty", difficulty))
     return difficulty
 
 
-# entry point that walks three scenarios end to end
+# entry point that walks three contrasting network conditions
 def main():
     rule("Bonus Two Adaptive Difficulty")
     print(f"Target Block Time: {TARGET_BLOCK_SECONDS}s")
     print(f"Retarget Interval: {RETARGET_INTERVAL} Blocks")
+    print(f"Blocks Per Scenario: {_BLOCKS}")
     print("Start Difficulty:  18 bits")
     print()
 
@@ -49,9 +58,9 @@ def main():
     divider()
     rows(
         [
-            ("Final After Surge", final_surge),
-            ("Final After Drought", final_drought),
-            ("Final After Steady", final_steady),
+            ("Surge End", final_surge),
+            ("Drought End", final_drought),
+            ("Steady End", final_steady),
             ("Surge Raised", final_surge > 18),
             ("Drought Dropped", final_drought < 18),
             ("Steady Unchanged", final_steady == 18),
