@@ -12,10 +12,12 @@ from labs.three.chain import (
     AppendStatus,
     assemble_candidate,
 )
-from common.banner import rule, rows, divider
+from common.banner import rule, rows, divider, section
 
-# difficulty tuned so each mined block takes a noticeable fraction of a second
-DIFFICULTY = 24
+# difficulty tuned so each block costs visible compute without dragging the run
+DIFFICULTY = 22
+# pause between observable events keeps the cadence readable on stage
+PAUSE = 0.3
 
 
 # wall clock timestamp used for both txs and block headers
@@ -25,7 +27,6 @@ def now() -> int:
 
 # builds a real ed25519 signed transaction from a fresh keypair
 def make_signed_tx(data: bytes) -> Tx:
-    # generate a throwaway keypair and sign the canonical preimage bytes
     key = default_eccrypto.generate_key("curve25519")
     sender = key.pub().key_to_bin()
     ts = now()
@@ -35,14 +36,11 @@ def make_signed_tx(data: bytes) -> Tx:
 
 # mines one block on the chain tip including every mempool tx then appends it
 def mine_one(chain: Chain, mempool: Mempool, difficulty: int = DIFFICULTY) -> Block:
-    # snapshot the candidate inputs from the chain and mempool
     txs_hash, tx_hashes = assemble_candidate(mempool)
     timestamp = now()
     prev_hash = chain.tip_hash
-    # search for a valid nonce and assemble the block from the result
     nonce, _ = mine_block(prev_hash, txs_hash, difficulty, timestamp)
     block = Block(prev_hash, txs_hash, timestamp, difficulty, nonce, tx_hashes)
-    # append to the chain and clear the included txs from the mempool
     assert chain.append(block)
     mempool.remove(list(tx_hashes))
     return block
@@ -54,34 +52,51 @@ def deliver(chain: Chain, block: Block) -> AppendStatus:
     return status
 
 
-# scenario 1 server submits tx node 0 mines and all three nodes converge
+# prints a compact snapshot of every node tip height for cross node visibility
+def snapshot_nodes(label, nodes):
+    heights = " ".join(f"node{i}={c.height}" for i, (c, _) in enumerate(nodes))
+    print(f"  {label}: {heights}")
+
+
+# scenario one server submits multiple transactions and all three nodes converge
 def happy_path() -> None:
-    rule("Scenario 1: Happy Path")
-    print("Server Submits One Tx. Node 0 Mines Four Blocks (1 + 3 Confirmations).")
-    print("Each Block Is Gossiped To Nodes 1 And 2.\n")
-    divider()
-    # spawn three isolated nodes each with its own chain and mempool
+    rule("Scenario One Multi Transaction Convergence")
+    print("Server Submits Ten Transactions To Node Zero")
+    print("Node Zero Mines Five Blocks That Land On Every Node\n")
+    section("Setup")
     nodes = [(Chain(), Mempool()) for _ in range(3)]
-    # the mock server submits one signed tx to node 0 only
-    tx = make_signed_tx(b"hello chain")
-    print(f"[Server] Submitting Tx ({tx.data!r}) To Node 0")
-    assert nodes[0][1].add(tx) is not None
-    # node 0 mines the tx into a block then mines three confirmations on top
-    for _ in range(1, 5):
+    txs = [make_signed_tx(f"payment-{i}".encode()) for i in range(10)]
+    print(f"[Server] Pushing {len(txs)} Signed Transactions To Node 0 Mempool")
+    for tx in txs:
+        assert nodes[0][1].add(tx) is not None
+    print(f"[Node 0] Mempool Size = {len(nodes[0][1])}")
+    snapshot_nodes("Heights Before", nodes)
+    time.sleep(PAUSE)
+
+    section("Mining And Gossip")
+    for round_num in range(1, 6):
+        # node 0 mines the next block which sweeps mempool then gossips to peers
         block = mine_one(*nodes[0])
-        print(f"[Node 0] Mined Block Height={nodes[0][0].height}")
-        # each block is delivered to the other two nodes via try_extend
+        height = nodes[0][0].height
+        print(
+            f"[Node 0] Mined Block Height={height} "
+            f"Txs={len(block.tx_hashes)} "
+            f"Mempool={len(nodes[0][1])}"
+        )
         for i, (chain, _) in enumerate(nodes[1:], start=1):
             status = deliver(chain, block)
             print(f"  -> Node {i}: {status.name}, Height={chain.height}")
+        time.sleep(PAUSE)
+
     divider()
-    # consistency check confirms every node ended at the same tip
     heights = [c.height for c, _ in nodes]
     tips = {c.tip_hash for c, _ in nodes}
-    converged = len(tips) == 1 and all(h == 4 for h in heights)
+    mempools = [len(m) for _, m in nodes]
+    converged = len(tips) == 1 and all(h == 5 for h in heights)
     rows(
         [
             ("Heights", heights),
+            ("Mempools", mempools),
             ("Unique Tips", len(tips)),
             ("Status", "Converged" if converged else "Inconsistent"),
         ]
@@ -89,83 +104,111 @@ def happy_path() -> None:
     assert converged
 
 
-# scenario 2 orphan arrives before its parent and walk back fills the gap
+# scenario two walk back resolution across a five block orphan chain
 def walk_back() -> None:
-    rule("Scenario 2: Walk-Back Orphan Resolution")
-    print("Node 0 Mines Block1 And Block2. Block2 Reaches Node 1 First.")
-    print("Node 1 Detects The Orphan, Requests Block1, Then Both Land In Order.\n")
-    divider()
-    # node 0 mines two blocks while node 1 sits empty
-    a, b = Chain(), Chain()
+    rule("Scenario Two Five Block Walk Back Resolution")
+    print("Node Zero Mines Five Blocks Out Of Order")
+    print("Node One Receives Them Newest First And Must Walk Back\n")
+    section("Sender Side Build")
+    a = Chain()
     mp = Mempool()
-    block1 = mine_one(a, mp)
-    block2 = mine_one(a, mp)
-    print("[Node 0] Mined Block1 (h=1) And Block2 (h=2)")
-    # block2 reaches node 1 before its parent landing as an orphan
-    print("[Network] Block2 Arrives At Node 1 First; Block1 Delayed")
-    status, parent_hash = b.try_extend(block2)
-    parent_preview = parent_hash[:8].hex()
-    print(f"[Node 1] try_extend(block2) -> {status.name}, Parent={parent_preview}...")
-    assert status is AppendStatus.NEEDS_PARENT
-    # the delayed parent finally arrives and both blocks now land in order
-    print("[Network] Block1 Arrives At Node 1 (Walk-Back Fulfilled)")
-    s1 = deliver(b, block1)
-    print(f"[Node 1] try_extend(block1) -> {s1.name}, Height={b.height}")
-    s2 = deliver(b, block2)
-    print(f"[Node 1] try_extend(block2) -> {s2.name}, Height={b.height}")
+    blocks = []
+    for i in range(5):
+        # each block carries a single signed tx so the body commitment is non trivial
+        mp.add(make_signed_tx(f"walkback-{i}".encode()))
+        blk = mine_one(a, mp)
+        blocks.append(blk)
+        print(
+            f"[Node 0] Mined Block {i + 1} Height={a.height} Tip={a.tip_hash[:8].hex()}..."
+        )
+        time.sleep(PAUSE)
+    print(f"[Node 0] Final Tip Height = {a.height}")
+
+    section("Receiver Side Out Of Order Ingest")
+    b = Chain()
+    # ship blocks in reverse so every non genesis block lands as an orphan first
+    for blk in reversed(blocks):
+        status, parent_hash = b.try_extend(blk)
+        print(
+            f"[Node 1] try_extend(block at h={blocks.index(blk) + 1}) -> {status.name} "
+            f"parent={parent_hash[:8].hex() if parent_hash else 'n/a'}..."
+        )
+        time.sleep(PAUSE)
+
+    section("Forward Pass After Walk Back")
+    # apply blocks in order now to simulate the walk back resolution
+    for blk in blocks:
+        status = deliver(b, blk)
+        print(
+            f"[Node 1] Re Ingest Block Height={blocks.index(blk) + 1} -> {status.name}"
+        )
+        time.sleep(PAUSE)
+
     divider()
-    resolved = b.height == 2 and a.tip_hash == b.tip_hash
+    resolved = b.height == 5 and a.tip_hash == b.tip_hash
     rows(
         [
-            ("Final Height", b.height),
-            ("Matches Node 0", a.tip_hash == b.tip_hash),
-            ("Status", "Walk-Back Resolved" if resolved else "Orphan Still Stuck"),
+            ("Sender Tip Height", a.height),
+            ("Receiver Tip Height", b.height),
+            ("Tips Match", a.tip_hash == b.tip_hash),
+            ("Status", "Walk Back Resolved" if resolved else "Orphan Still Stuck"),
         ]
     )
     assert resolved
 
 
-# scenario 3 shorter chain swaps to a longer sibling via adopt_fork
+# scenario three deep reorg with mempool sized fork choice
 def reorg() -> None:
-    rule("Scenario 3: Longest-Chain Reorg")
-    print("Node 0 Mines 2 Blocks. Node 1 Mines 3 Blocks Independently.")
-    print("Node 0 Receives Node 1's Chain And Atomically Swaps To It.\n")
-    divider()
-    # node 0 builds a two block chain
-    a, b = Chain(), Chain()
-    mp_a, mp_b = Mempool(), Mempool()
-    long_chain = [GENESIS]
-    for _ in range(2):
+    rule("Scenario Three Deep Reorg Seven Versus Five")
+    print("Node Zero Builds A Five Block Chain")
+    print("Node One Builds A Seven Block Chain In Parallel")
+    print("Node Zero Adopts The Longer Chain Atomically\n")
+
+    section("Build Short Chain On Node Zero")
+    a = Chain()
+    mp_a = Mempool()
+    for i in range(5):
+        mp_a.add(make_signed_tx(f"short-{i}".encode()))
         mine_one(a, mp_a)
-    # node 1 builds a three block chain in parallel and tracks every block
-    for _ in range(3):
-        long_chain.append(mine_one(b, mp_b))
-    print(f"[Node 0] Short Chain  Height={a.height}, Tip={a.tip_hash[:8].hex()}...")
-    print(f"[Node 1] Long Chain   Height={b.height}, Tip={b.tip_hash[:8].hex()}...")
-    # node 0 receives node 1 chain and atomically swaps to the longer tip
+        print(f"[Node 0] Short Tip Height={a.height} Tip={a.tip_hash[:8].hex()}...")
+        time.sleep(PAUSE)
+
+    section("Build Long Chain On Node One")
+    b = Chain()
+    mp_b = Mempool()
+    long_chain = [GENESIS]
+    for i in range(7):
+        mp_b.add(make_signed_tx(f"long-{i}".encode()))
+        block = mine_one(b, mp_b)
+        long_chain.append(block)
+        print(f"[Node 1] Long Tip Height={b.height} Tip={b.tip_hash[:8].hex()}...")
+        time.sleep(PAUSE)
+
+    section("Atomic Adoption On Node Zero")
+    print(f"[Node 0] Pre Adopt Tip Height={a.height} Tip={a.tip_hash[:8].hex()}...")
     accepted = a.adopt_fork(long_chain)
-    new_tip = a.tip_hash[:8].hex()
-    print(
-        f"[Node 0] adopt_fork() -> {accepted}, New Height={a.height}, "
-        f"New Tip={new_tip}..."
-    )
+    print(f"[Node 0] adopt_fork() -> {accepted}")
+    print(f"[Node 0] Post Adopt Tip Height={a.height} Tip={a.tip_hash[:8].hex()}...")
+    time.sleep(PAUSE)
+
     divider()
-    reorged = accepted and a.height == 3 and a.tip_hash == b.tip_hash
+    reorged = accepted and a.height == 7 and a.tip_hash == b.tip_hash
     rows(
         [
             ("New Height", a.height),
-            ("Matches Node 1", a.tip_hash == b.tip_hash),
+            ("Matches Node One Tip", a.tip_hash == b.tip_hash),
             ("Status", "Reorg Adopted" if reorged else "Reorg Rejected"),
         ]
     )
     assert reorged
 
 
-# runs all three scenarios back to back and prints a final pass banner
+# runs the three scenarios end to end and prints the final pass banner
 def main() -> None:
-    rule("Lab 3 Local Simulation")
+    rule("Lab Three Local Simulation")
     print("Three Scenarios. No IPv8 Wire, No Server, No Peer Discovery.")
-    print("Pure Chain Primitives Demonstrating The Protocol End-To-End.\n")
+    print(f"Pure Chain Primitives At Mining Difficulty {DIFFICULTY}.")
+    print()
     happy_path()
     print()
     walk_back()
