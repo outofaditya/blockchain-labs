@@ -1,8 +1,6 @@
 # Blockchain Labs
 
-A Python implementation of three progressively involved peer-to-peer protocols built on top of [`py-ipv8`](https://github.com/Tribler/py-ipv8), produced for the **Blockchain Engineering** course at TU Delft.
-
-Each lab is a standalone IPv8 client that joins a course community over UDP, discovers a verified server peer by published public key, and completes a specific cryptographic exchange. The clients are wired to be fast, minimal, and survive UDP loss.
+Three peer-to-peer labs on top of [`py-ipv8`](https://github.com/Tribler/py-ipv8) for the TU Delft Blockchain Engineering course, plus three bonus challenges.
 
 ## Table Of Contents
 
@@ -14,13 +12,13 @@ Each lab is a standalone IPv8 client that joins a course community over UDP, dis
 - [Lab 3 — PoW Blockchain Over IPv8](#lab-3--pow-blockchain-over-ipv8)
 - [Demonstration](#demonstration)
 - [Testing](#testing)
-- [Optimizations](#optimizations)
+- [Bonus](#bonus)
 - [Identity And Keys](#identity-and-keys)
 - [Dependencies](#dependencies)
 
 ## Overview
 
-All three labs share the same foundation: an IPv8 peer that joins a community by its 20-byte identifier, walks the gossip network to find a course-supplied server, exchanges authenticated payloads, and exits cleanly on the expected reply. The lab numbers do not depend on each other at runtime, but the **same IPv8 key pair** identifies the node across all three: the public key registered in Lab 1 is what every later lab proves ownership of.
+All three labs share one IPv8 key pair per member. Lab 1 binds the key to a TU Delft email via PoW; Labs 2 and 3 reuse it.
 
 ## Repository Layout
 
@@ -39,12 +37,14 @@ All three labs share the same foundation: an IPv8 peer that joins a community by
 │       ├── chain.py   # lab 3: block primitives, chain, mempool, mining
 │       └── node.py    # lab 3: ipv8 node hosting the chain community
 ├── demo/
-│   ├── mine.py     # local proof-of-work walkthrough at reduced difficulty
-│   ├── sign.py     # three in-process signers running the round-robin protocol
-│   └── chain.py    # three-node simulation: happy path, walk-back, reorg
-├── tests/          # pytest suite mirroring labs/ + common/
+│   ├── mine.py     # lab 1 walkthrough
+│   ├── sign.py     # lab 2 walkthrough
+│   ├── chain.py    # lab 3 walkthrough
+│   └── bonus/      # bonus walkthroughs
+├── bonus/          # bonus implementations isolated from labs/
+├── tests/          # pytest suite mirroring labs/ + common/ + bonus/
 ├── tasks/          # original assignment briefs
-├── keys/           # per-member IPv8 key files (gitignored, one .pem per member)
+├── keys/           # per-member IPv8 key files (gitignored)
 ├── pyproject.toml  # ruff and pytest configuration
 └── requirements.txt
 ```
@@ -56,46 +56,43 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Python 3.10 or newer is required. Each lab loads its IPv8 identity from a `.pem` file under `keys/`; `KEY_PATH` (env var, defaults to `keys/aditya.pem` for Lab 1) selects which one. Lab 1 generates a fresh key on first run if the target file does not exist.
+Python 3.10 or newer is required. Each lab loads its IPv8 identity from a `.pem` file under `keys/`; `KEY_PATH` (env var, defaults to `keys/aditya.pem` for Lab 1) selects which one.
 
 ## Lab 1 — Proof Of Work Over IPv8
 
-A standalone proof-of-work search followed by a single authenticated submission to the Lab 1 course server.
-
-The miner brute-forces a SHA-256 nonce over `email + "\n" + github_url + "\n" + nonce_8be` until the digest carries at least 28 leading zero bits — roughly 2²⁸ ≈ 268 million expected attempts. Search is parallelised across every CPU core with `multiprocessing`, partitioned by worker stride, with an amortised stop-event check (probed once per 16,384 hashes) so workers spend their time hashing rather than syscalling. First worker to find a winning nonce wins and signals the others to terminate.
-
-The client then joins the Lab 1 IPv8 community, walks the gossip network until it finds the peer whose public key matches the server's published key, and submits `(email, github_url, nonce)` through `ez_send` — IPv8's authenticated send, which signs the payload with the local Ed25519 key. The server re-hashes, verifies the leading zero bits, and replies with an acceptance status.
-
-**Run**:
+Mine a SHA-256 nonce over `email + "\n" + github_url + "\n" + nonce_8be` until the digest carries at least 28 leading zero bits, then submit `(email, github_url, nonce)` to the Lab 1 server.
 
 ```bash
 .venv/bin/python -m labs.one.miner             # mine; copy the printed nonce
 .venv/bin/python -m labs.one.client <nonce>    # submit to the server
 ```
 
+Key choices:
+
+- Pre-computed prefix + cached SHA-256 state — only nonce bytes hashed per attempt.
+- One subprocess per core, nonce stride partitioning, linear core scaling.
+- `stop_event` polled once per 16 384 attempts; siblings exit within milliseconds of a winner.
+- Byte-wise leading-zero check short-circuits on the first non-zero byte.
+- Server filtered by published public key — no cross-talk from other peers.
+
 ## Lab 2 — Coordinated Group Signing
 
-Three peers register as a group with the Lab 2 server, then complete three signing rounds within a shared 10-second wall-clock budget.
-
-Each round the server issues a fresh 32-byte nonce. All three members sign it with their respective Ed25519 keys, and one designated submitter bundles the three signatures and ships them back. The submitter rotates per round — pre-assigned via round-robin so no coordination message is needed to decide who drives a given round.
-
-The implementation uses `asyncio.Event` primitives to bridge IPv8's synchronous handlers and the round driver coroutine. The submitter retries challenge requests and bundle submissions on a one-second timeout, exploiting the server's idempotency guarantee to make duplicate sends harmless. Non-submitters fire their signature three times with 50ms spacing to absorb UDP loss without an ACK protocol.
-
-**Run** (one terminal per member, ports distinct for local testing):
+Three peers register a group, then complete three signing rounds within a 10-second budget. Each round the server issues a 32-byte nonce; all three members sign it; the round's submitter (member N submits round N) bundles the three signatures and ships them back.
 
 ```bash
 .venv/bin/python -m labs.two.signer <pem_path> <port>
 ```
 
-The group's three Ed25519 keys are baked into `labs/two/signer.py` in registration order (Pedro → Danil → Aditya); each instance loads its own `.pem`, matches its public key against the constant, derives its `member_index`, and plays the right role for each round.
+Key choices:
+
+- Round number IS the submitter index — no leader-election message.
+- Three `asyncio.Event` primitives bridge synchronous handlers and the async driver.
+- 1 s retry on `ChallengeRequest` and `SignatureBundle` leans on server idempotency.
+- Signature fanned out 3 × at 50 ms spacing for UDP-loss tolerance without ACKs.
 
 ## Lab 3 — PoW Blockchain Over IPv8
 
-A three-node proof-of-work blockchain. Each node mines blocks against an 84-byte header, gossips winning blocks to teammates, and answers the Lab 3 server's transaction-submission and chain-walking queries. Nodes converge on a single canonical chain via the longest-chain rule. The server walks all three chains and verifies PoW, header linking, body commitment, and three-way consistency.
-
-Mining runs **continuously**: each node mines empty or transaction-bearing blocks against the current tip in a back-to-back loop, so a server transaction is buried in confirmations within seconds of arrival. Registration is gated on a **chain quorum** — one designated registrar (the first member in the canonical group order) only sends `RegisterBlockchain` after all three nodes are mutually discovered in the chain overlay, preventing the server from wasting its retry budget on absent peers. Fork resolution is handled by a side pool of every received block plus a longest-chain scan that atomically swaps tips via `adopt_fork` whenever a sibling chain overtakes the local one.
-
-**Run** (one terminal per member, ports distinct for local testing):
+Three-node PoW blockchain. Each node mines blocks against an 84-byte header, gossips winners to teammates, and answers the server's transaction-submission and chain-walk queries. Longest-chain rule.
 
 ```bash
 export UNI_EMAIL=<your_email>
@@ -103,80 +100,102 @@ export KEY_PATH=keys/<name>.pem
 .venv/bin/python -m labs.three.node <port>
 ```
 
-The chain's 20-byte community ID, the group ID, and the three member public keys (in registration order: Pedro → Danil → Aditya) are baked into `labs/three/node.py`. Each node matches its own key against `MEMBER_KEYS` and joins the right slot.
+Key choices:
+
+- Continuous mining; chain-quorum gate ensures the registrar only fires after all three nodes are mutually discovered.
+- Side-pool `_pool` retains FORK_BRANCH blocks for later reorg.
+- Walk-back orphan resolution with `_inflight` dedup so bursts of orphans spawn one parent request, not many.
+- `_try_drain_and_reorg` runs both extend-from-pool and longest-chain-scan on every ingest.
+- `adopt_fork` validates the candidate into fresh indexes before swapping — no half-applied fork.
+- `@lazy_wrapper(PayloadCls)` on every handler.
 
 ## Demonstration
 
-Three local walkthroughs under `demo/` reproduce each lab's mechanics without a live server or real network. Each runs to completion in under a second on a laptop and ends with a pass/fail line.
+Six local walkthroughs reproduce each lab's mechanics and the three bonus challenges. No live server, no real network. Each ends with a pass banner.
+
+### `demo.mine` — Lab 1 PoW Sweep
+
+Single-thread PoW search at difficulty 20, 22, and 24 to demonstrate per-bit work doubling, then parallel mining at difficulty 26 across every CPU core. Verifies the mined nonce against the difficulty bound and prints worker count, attempt totals, and wall time per step.
 
 ```bash
-.venv/bin/python -m demo.mine    # Lab 1: single-threaded PoW search at difficulty 20, with hash verification
-.venv/bin/python -m demo.sign    # Lab 2: three in-process signers, three rounds, round-robin submitters, mock server
-.venv/bin/python -m demo.chain   # Lab 3: happy-path consensus, walk-back orphan resolution, longest-chain reorg
+.venv/bin/python -m demo.mine          # ≈ 22 s
 ```
 
-The Lab 3 demo runs three scripted scenarios in sequence and asserts cross-node consistency at each stage.
+### `demo.sign` — Lab 2 Round-Robin Signing
+
+Three in-process signers complete three rounds against a mock server with a 30 % UDP-drop model. Each member's signature is retried up to six times per round; per-attempt DROPPED / DELIVERED status is printed so the retry logic is visible. Asserts three distinct submitters within the 10-second budget.
+
+```bash
+.venv/bin/python -m demo.sign          # ≈ 4 s
+```
+
+### `demo.chain` — Lab 3 Three-Node Sim
+
+Three isolated nodes share no network. Scenario 1: server pushes ten signed txs to node 0, which mines five blocks that gossip to the others; consistency check asserts identical tips and heights. Scenario 2: five blocks mined out-of-order arrive reversed at a second node, walk-back fills the orphan chain. Scenario 3: node 0 builds a five-block chain, node 1 builds a seven-block chain; node 0 atomically adopts the longer chain.
+
+```bash
+.venv/bin/python -m demo.chain         # ≈ 50 s
+```
+
+### `demo.bonus.difficulty` — Adaptive Retarget
+
+Mines real blocks across four 32-block scenarios with synthesized inter-block gaps to exercise the retarget algorithm: surge (gap 1 s), drought (gap 8 s), steady (gap 2 s), abrupt regime change (fast → slow halfway). Each retarget boundary prints span, expected span, ratio, clamp, and the resulting difficulty transition.
+
+```bash
+.venv/bin/python -m demo.bonus.difficulty   # ≈ 53 s
+```
+
+### `demo.bonus.reorganize` — Fork Convergence
+
+Three scenarios. (A) Five real signed transactions across three blocks are displaced by a longer empty fork; all five return to the mempool. (B) A 22-deep reorg attempt is rejected by the depth cap. (C) A reorg exactly at the configured max depth is accepted.
+
+```bash
+.venv/bin/python -m demo.bonus.reorganize   # ≈ 4 s
+```
+
+### `demo.bonus.compact` — Compact Block Propagation
+
+A 100-tx block is packed to compact form (six-byte short IDs salted by the block nonce). (A) Receiver has every tx in mempool: reconstruction in one round, 79 % wire-size reduction. (B) Receiver missing every 15th tx: the protocol identifies missing indices, the sender fills, reconstruction completes. (C) Sender forges a commitment mismatch: receiver returns the abandon sentinel and would fall back to a full block fetch.
+
+```bash
+.venv/bin/python -m demo.bonus.compact      # ≈ 3 s
+```
 
 ## Testing
-
-The pytest suite under `tests/` mirrors the source layout: `tests/labs/three/test_chain.py` covers chain primitives and the mining-loop integration, `tests/labs/one/test_miner.py` covers PoW search and validation, `tests/labs/two/test_signer.py` pins the group-signing invariants, `tests/common/` covers the shared helpers.
 
 ```bash
 .venv/bin/pytest
 ```
 
-The suite runs 32 tests in under half a second. Coverage follows a small-to-large progression: primitive functions first (hashing, byte-level zero checks, header packing), then validators, then mempool gates, then chain operations (append, try_extend, adopt_fork), ending with an end-to-end `mining_loop` integration that submits a real signed transaction, mines a block, and verifies the chain advanced.
+**67 tests pass in ~0.3 s.** 32 over `labs/` + `common/`, 35 over `bonus/`.
 
-## Optimizations
+## Bonus
 
-### Lab 1 Proof Of Work (`labs/one/miner.py`)
+Three of the six challenges from the optional bonus brief. Isolated under `bonus/` so the main lab path is untouched.
 
-- `Struct(">q")` precompiled — skips format parse per attempt.
-- `PREFIX` precomputed — invariant bytes hashed once, not per nonce.
-- `sha256(PREFIX).copy()` per nonce — only nonce bytes mixed in.
-- Byte-wise zero check with `any(digest[:full])` — short-circuits on first non-zero byte.
-- One subprocess per core, nonce stride partitioning — linear core scaling, zero coordination.
-- `stop_event` polled every 16,384 attempts — termination within ms, syscall cost invisible.
+### Bonus 6 — Adaptive Difficulty (`bonus/difficulty.py`)
 
-### Lab 1 IPv8 Submission (`labs/one/client.py`)
+PoW retarget targeting a configurable block time. Median-of-11 past-timestamp gate defeats single-miner timestamp manipulation; per-retarget bit delta clamped to ±2 bits prevents oscillation; absolute floor and ceiling bound difficulty.
 
-- Server filtered by published public key — ignores other students' peers and unsigned traffic.
-- `submitted` flag — one send per server match.
+```bash
+.venv/bin/pytest tests/bonus/test_difficulty.py
+```
 
-### Lab 2 Group Signing (`labs/two/signer.py`)
+### Bonus 5 — Fork Convergence Polish (`bonus/reorganize.py`)
 
-- `SUBMITTER_BY_ROUND` static — no leader-election message.
-- Three `asyncio.Event` primitives — bridge sync IPv8 handlers and async driver.
-- 1s retry on `ChallengeRequest` and `SignatureBundle` — leans on server idempotency.
-- Signature fanned out 3× at 50 ms spacing — UDP-loss tolerance without ACKs.
-- `NonceShare` re-broadcast on timeout — recovers from a lost share without a request protocol.
+Wraps `adopt_fork` with (a) mempool restoration of transactions in displaced blocks that don't reappear in the new chain, (b) max-depth gate rejecting long-range fakery, (c) common-ancestor detection.
 
-### Lab 3 Chain Primitives (`labs/three/chain.py`)
+```bash
+.venv/bin/pytest tests/bonus/test_reorganize.py
+```
 
-- `_HEADER_STRUCT`, `_PREFIX_STRUCT`, `_U64_STRUCT` precompiled — one struct call per packing.
-- `_EMPTY_TXS_HASH` constant — empty-body short-circuit.
-- `sha256(prefix).copy()` per nonce (mirrors Lab 1).
-- `Chain.by_hash` + `by_height` both maintained — O(1) lookup either way.
-- `AppendStatus` 5-status enum — handler dispatches without re-validation.
-- `adopt_fork` builds fresh indexes then atomically assigns — no half-applied fork.
-- Mempool verify-then-dedup — invalid txs never enter the pool.
+### Bonus 2 — Compact Block Propagation (`bonus/compact.py`)
 
-### Lab 3 Node Behaviour (`labs/three/node.py`)
+BIP-152-style. Block ships header + six-byte short IDs salted by `block.nonce`. Receiver reconstructs from local mempool; missing slots trigger a targeted fill round. Commitment mismatch returns an explicit abandon sentinel for full-block fallback. ~79 % wire-size reduction at 100 txs/block.
 
-- `_teammate_keys` as a set — O(1) membership in every handler.
-- Single registrar (Pedro) — server sees one sender, not three duplicates.
-- `_chain_quorum` gate — registers only after all three nodes are mutually discovered; preserves the server's 3-retry budget.
-- `_pool` side-cache for FORK_BRANCH blocks — orphans stay reachable for later reorg.
-- Walk-back with `_inflight` dedup — bursts of orphans spawn one parent request, not N.
-- `_try_drain_and_reorg` runs both extend-from-pool and longest-chain-scan on every ingest.
-- Rebroadcast only on EXTENDS_TIP — prevents amplification on walk-back replies.
-- `_unpack` helper centralises auth decode + per-handler allow-list.
-
-### Cross-Cutting
-
-- `set_working_directory(REPO_ROOT)` — IPv8 state pinned to repo root regardless of cwd.
-- `set_walker_interval(0.5)` — halved from default, faster peer discovery.
-- All logging pinned to CRITICAL — keeps demo output clean.
+```bash
+.venv/bin/pytest tests/bonus/test_compact.py
+```
 
 ## Identity And Keys
 
