@@ -1,6 +1,6 @@
 # Blockchain Labs
 
-Three peer-to-peer labs on top of [`py-ipv8`](https://github.com/Tribler/py-ipv8) for the TU Delft Blockchain Engineering course, plus three bonus challenges.
+Three peer-to-peer labs and three bonus challenges built on [`py-ipv8`](https://github.com/Tribler/py-ipv8) for the TU Delft **Blockchain Engineering** course. The labs progress from a standalone proof-of-work submission, through coordinated group signing under a tight wall-clock budget, to a three-node PoW blockchain that converges on a single chain via the longest-chain rule.
 
 ## Table Of Contents
 
@@ -18,7 +18,7 @@ Three peer-to-peer labs on top of [`py-ipv8`](https://github.com/Tribler/py-ipv8
 
 ## Overview
 
-All three labs share one IPv8 key pair per member. Lab 1 binds the key to a TU Delft email via PoW; Labs 2 and 3 reuse it.
+Each lab is a standalone IPv8 client. The client joins a course-published community by 20-byte ID, discovers the server peer by published public key, exchanges authenticated payloads, and exits on the expected reply. The labs are independent at runtime but **share the same IPv8 key pair** per member: Lab 1 binds the public key to a TU Delft email via a 28-bit proof of work, and Labs 2 and 3 reuse the same key to identify the node across the course.
 
 ## Repository Layout
 

@@ -2,21 +2,21 @@ import time
 
 from ipv8.keyvault.crypto import default_eccrypto
 
-from bonus.reorganize import MAX_REORG_DEPTH, reorg_depth, reorganize
 from labs.three.chain import (
-    GENESIS,
-    GENESIS_HASH,
+    Tx,
     Block,
     Chain,
+    GENESIS,
     Mempool,
-    Tx,
-    compute_block_hash,
-    compute_tx_hash,
-    compute_txs_hash,
     mine_block,
     pack_header,
+    GENESIS_HASH,
+    compute_tx_hash,
+    compute_txs_hash,
+    compute_block_hash,
 )
 from common.banner import rule, rows, divider, section
+from bonus.reorganize import reorganize, reorg_depth, MAX_REORG_DEPTH
 
 NOW = 1_700_000_000
 DIFFICULTY = 8

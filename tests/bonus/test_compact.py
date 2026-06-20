@@ -1,19 +1,19 @@
 from ipv8.keyvault.crypto import default_eccrypto
 
 from bonus.compact import (
+    short_id,
+    reconstruct,
+    fill_missing,
     SHORT_ID_BYTES,
+    full_wire_size,
     build_short_index,
     compact_wire_size,
-    fill_missing,
-    full_wire_size,
     make_compact_block,
-    reconstruct,
-    short_id,
 )
 from labs.three.chain import (
+    Tx,
     Block,
     Mempool,
-    Tx,
     compute_tx_hash,
     compute_txs_hash,
 )

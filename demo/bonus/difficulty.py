@@ -1,10 +1,10 @@
 import time
 
 from bonus.difficulty import (
+    retarget,
     MAX_ADJUST_FACTOR,
     RETARGET_INTERVAL,
     TARGET_BLOCK_SECONDS,
-    retarget,
 )
 from labs.three.chain import mine_block
 from common.banner import rule, rows, divider, section

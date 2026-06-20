@@ -1,8 +1,8 @@
 from bonus.difficulty import (
+    retarget,
     MAX_FUTURE_DRIFT,
     is_valid_timestamp,
     median_past_timestamp,
-    retarget,
 )
 
 

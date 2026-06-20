@@ -4,8 +4,8 @@ from struct import Struct
 from hashlib import sha256
 from multiprocessing import Event, Queue, Process
 
-from labs.one.miner import EMAIL, PREFIX, GITHUB_URL, validate_nonce
 from common.banner import rule, rows, divider, section
+from labs.one.miner import EMAIL, PREFIX, GITHUB_URL, validate_nonce
 
 # precompiled packer matching the production worker for the 8 byte nonce
 _NONCE_STRUCT = Struct(">q")
