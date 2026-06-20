@@ -1,3 +1,4 @@
+from hashlib import sha256
 from dataclasses import dataclass
 
 from labs.three.chain import (
@@ -12,9 +13,9 @@ from labs.three.chain import (
 SHORT_ID_BYTES = 6
 
 
-# six byte prefix of the tx hash used as the on wire identifier
-def short_id(tx_hash: bytes) -> bytes:
-    return tx_hash[:SHORT_ID_BYTES]
+# salted short id defeats pre computed collision attacks by mixing a per block nonce
+def short_id(tx_hash: bytes, salt: int) -> bytes:
+    return sha256(tx_hash + salt.to_bytes(8, "big")).digest()[:SHORT_ID_BYTES]
 
 
 # wire form of a freshly mined block carrying only header plus short ids
@@ -28,7 +29,7 @@ class CompactBlock:
     short_ids: tuple[bytes, ...]
 
 
-# packages a freshly mined block into its compact wire form
+# packages a freshly mined block into its compact wire form using its own nonce as salt
 def make_compact_block(block: Block) -> CompactBlock:
     return CompactBlock(
         prev_hash=block.prev_hash,
@@ -36,49 +37,56 @@ def make_compact_block(block: Block) -> CompactBlock:
         timestamp=block.timestamp,
         difficulty=block.difficulty,
         nonce=block.nonce,
-        short_ids=tuple(short_id(h) for h in block.tx_hashes),
+        short_ids=tuple(short_id(h, block.nonce) for h in block.tx_hashes),
     )
 
 
-# builds the short id to Tx lookup table the receiver uses for reconstruction
-def build_short_index(mempool: Mempool) -> dict[bytes, Tx]:
-    return {short_id(h): tx for h, tx in mempool.pending.items()}
+# builds the short id to Tx candidate map keyed by salt drawn from the block nonce
+def build_short_index(mempool: Mempool, block_nonce: int) -> dict[bytes, list[Tx]]:
+    index: dict[bytes, list[Tx]] = {}
+    for h, tx in mempool.pending.items():
+        index.setdefault(short_id(h, block_nonce), []).append(tx)
+    return index
 
 
 # attempts to reconstruct the full block from the compact form using local mempool
+# returns block None and a missing list when receiver can request fills
+# returns block None and None when commitment mismatch is unrecoverable from local state
 def reconstruct(
     compact: CompactBlock,
-    short_index: dict[bytes, Tx],
+    short_index: dict[bytes, list[Tx]],
     prefilled: dict[int, Tx] | None = None,
-) -> tuple[Block | None, list[int]]:
+) -> tuple[Block | None, list[int] | None]:
     prefilled = prefilled or {}
     resolved: list[Tx | None] = [None] * len(compact.short_ids)
 
     # apply any prefills supplied by the sender or a previous fill round
     for idx, tx in prefilled.items():
-        resolved[idx] = tx
+        if 0 <= idx < len(resolved):
+            resolved[idx] = tx
 
-    # try to resolve every remaining slot from the receiver mempool by short id
+    # resolve every remaining slot from the receiver mempool by short id
+    # collision aware lookup picks the first candidate ties broken by mempool insertion order
     for idx, sid in enumerate(compact.short_ids):
         if resolved[idx] is not None:
             continue
-        tx = short_index.get(sid)
-        if tx is not None:
-            resolved[idx] = tx
+        candidates = short_index.get(sid)
+        if candidates:
+            resolved[idx] = candidates[0]
 
     # surface the still missing slot indices so a fill request can target them
     missing = [i for i, t in enumerate(resolved) if t is None]
     if missing:
         return None, missing
 
-    # all slots resolved compute the full tx hashes and verify the body commitment
+    # all slots resolved compute full tx hashes and verify the body commitment
     full_hashes = tuple(
         compute_tx_hash(t.sender_key, t.data, t.timestamp, t.signature)
         for t in resolved
     )
     if compute_txs_hash(full_hashes) != compact.txs_hash:
-        # short id collision left an incorrect resolution surface the failure to the caller
-        return None, list(range(len(compact.short_ids)))
+        # commitment mismatch signals the receiver to abandon compact path and fetch the full block
+        return None, None
 
     # commitment matches build the full block from the resolved transactions
     block = Block(
@@ -93,13 +101,17 @@ def reconstruct(
 
 
 # sender side helper that returns Tx data for the requested missing indices
+# silently ignores indices outside the block range to harden against hostile fill requests
 def fill_missing(
     block: Block,
     missing_indices: list[int],
     tx_archive: dict[bytes, Tx],
 ) -> dict[int, Tx]:
     fills: dict[int, Tx] = {}
+    upper = len(block.tx_hashes)
     for idx in missing_indices:
+        if idx < 0 or idx >= upper:
+            continue
         tx_hash = block.tx_hashes[idx]
         tx = tx_archive.get(tx_hash)
         if tx is not None:

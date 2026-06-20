@@ -67,5 +67,6 @@ def retarget(
 
     # each difficulty bit doubles required work hence log base two of the ratio
     delta = math.log2(ratio)
-    new_difficulty = int(round(current_difficulty + delta))
+    # math.floor with the half offset gives symmetric round half up across parities
+    new_difficulty = math.floor(current_difficulty + delta + 0.5)
     return max(MIN_DIFFICULTY, min(MAX_DIFFICULTY, new_difficulty))

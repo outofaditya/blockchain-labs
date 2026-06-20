@@ -36,13 +36,13 @@ def _make_tx(idx: int):
 
 
 # assembles a synthetic block carrying the supplied transactions
-def _build_block(tx_hashes: tuple[bytes, ...]) -> Block:
+def _build_block(tx_hashes: tuple[bytes, ...], nonce: int = 99) -> Block:
     return Block(
         prev_hash=b"\x00" * 32,
         txs_hash=compute_txs_hash(tx_hashes),
         timestamp=1_700_000_000,
         difficulty=8,
-        nonce=99,
+        nonce=nonce,
         tx_hashes=tx_hashes,
     )
 
@@ -71,8 +71,8 @@ def scenario_full_overlap(txs: list[Tx], hashes: list[bytes]):
     peer_pool = Mempool()
     for tx in txs:
         peer_pool.add(tx)
-    short_index = build_short_index(peer_pool)
-    print(f"[Receiver] Mempool Carries {len(short_index)} Transactions")
+    short_index = build_short_index(peer_pool, block.nonce)
+    print(f"[Receiver] Mempool Carries {len(peer_pool)} Transactions")
     time.sleep(PAUSE)
 
     rebuilt, missing = reconstruct(compact, short_index)
@@ -96,7 +96,7 @@ def scenario_partial_overlap(txs: list[Tx], hashes: list[bytes]):
     print(f"[Receiver] Mempool Carries {len(peer_pool)} Of {len(txs)} Transactions")
     time.sleep(PAUSE)
 
-    rebuilt, missing = reconstruct(compact, build_short_index(peer_pool))
+    rebuilt, missing = reconstruct(compact, build_short_index(peer_pool, block.nonce))
     print(f"[Receiver] First Pass Missing = {missing}")
     assert rebuilt is None and missing
     time.sleep(PAUSE)
@@ -107,7 +107,7 @@ def scenario_partial_overlap(txs: list[Tx], hashes: list[bytes]):
     time.sleep(PAUSE)
 
     rebuilt, missing = reconstruct(
-        compact, build_short_index(peer_pool), prefilled=fills
+        compact, build_short_index(peer_pool, block.nonce), prefilled=fills
     )
     print(f"[Receiver] Second Pass Missing = {missing}")
     print(f"[Receiver] Block Reconstructed = {rebuilt is not None}")

@@ -26,6 +26,8 @@ def find_common_ancestor_height(chain: Chain, candidate: list[Block]) -> int:
 
 
 # returns the depth of a candidate reorg measured in blocks discarded from the current chain
+# callers should treat the return as meaningful only when the candidate is strictly longer
+# than the current chain otherwise the value reflects mere divergence not an actual reorg
 def reorg_depth(chain: Chain, candidate: list[Block]) -> int:
     ancestor = find_common_ancestor_height(chain, candidate)
     return chain.height - ancestor
@@ -59,6 +61,8 @@ def reorganize(
         return False
 
     # restore displaced txs that did not land in any block of the new chain
+    # callers must populate tx_archive with verified Txs only since Mempool.add silently
+    # discards anything that fails verification leaving the mempool partially restored
     new_tx_hashes = set()
     for block in candidate:
         new_tx_hashes.update(block.tx_hashes)
