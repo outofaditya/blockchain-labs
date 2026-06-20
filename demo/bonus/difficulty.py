@@ -60,7 +60,7 @@ def simulate(label, cadence, start_difficulty=18):
 
 # entry point that walks four contrasting network conditions
 def main():
-    rule("Bonus Two Adaptive Difficulty")
+    rule("Bonus Six Adaptive Difficulty")
     print(f"Target Block Time: {TARGET_BLOCK_SECONDS}s")
     print(f"Retarget Interval: {RETARGET_INTERVAL} Blocks")
     print(f"Max Adjust Factor: {MAX_ADJUST_FACTOR}x")
@@ -100,7 +100,7 @@ def main():
     assert final_drought < 18
     assert final_steady == 18
     assert final_abrupt < final_surge
-    rule("Bonus Two Demo Passed")
+    rule("Bonus Six Demo Passed")
 
 
 if __name__ == "__main__":
